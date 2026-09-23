@@ -1,0 +1,35 @@
+# jev_router routing policy (user-editable)
+# Static provider availability. Empty include = all configured providers.
+provider_rules:
+  include: []
+  exclude: []
+
+# Complexity-band preference orders over presets. Every preset is first-class:
+# the first preset present in the live pool wins. Edit freely; invalid values
+# fall back to helpers/policy.py DEFAULT_BAND_ORDERS. Re-read on every call.
+band_orders:
+  light: [Fast, Efficiency, Default, Unhinged, Local, Power]
+  medium: [Default, Power, Unhinged, Local, Efficiency, Fast]
+  heavy: [Power, Unhinged, Default, Local, Efficiency, Fast]
+
+# Time-based rules. First matching window wins; empty window = all day,
+# empty days = every day. Midnight wrap supported ('22:00-06:00').
+# exclude = hard provider block while active; prefer = soft boost to band
+# front. Matching is instance-local time; timezone is informational.
+schedules: []
+# Example:
+# schedules:
+#   - name: night-free
+#     window: '22:00-06:00'
+#     prefer: [openrouter, a0_venice]
+#   - name: weekend-no-paid
+#     days: [sat, sun]
+#     exclude: [zai_coding]
+
+# Chat mentions (per message, highest precedence below the WebUI):
+#   stop using zai | do not use venice | no more openrouter | drop lm_studio
+#   use zai | switch to venice | use free models
+# Add tonight / today / for N hours to keep an exclude for the chat session.
+
+# Circuit breaker (health, overrides everything, logged distinctly):
+#   config.json: breaker_threshold (3), breaker_cooldown_hours (1.0)

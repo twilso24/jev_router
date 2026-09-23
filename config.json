@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "delegation_threshold": 0.6,
+  "delegation_mode": "advise",
+  "chat_preselect": true,
+  "jev_timeout_s": 2.0,
+  "jev_api_key": "",
+  "jev_model": "jev-latest",
+  "jev_timeout": 30,
+  "breaker_threshold": 3,
+  "breaker_cooldown_hours": 1.0
+}
