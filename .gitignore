@@ -1,0 +1,13 @@
+tmp/
+usr/
+__pycache__/
+.venv/
+*.pyc
+*.log
+*.db
+*.sqlite3
+.env
+
+# Agent Zero project-private state (never publish)
+.a0proj/
+tmp/
