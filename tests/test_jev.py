@@ -200,6 +200,14 @@ def test_query_reports_errors_via_on_error():
     assert 'RuntimeError' in seen[0]
 
 
+
+def test_get_client_reuses_instance_per_key_model_timeout():
+    a = jev.get_client('k1', 'jev-latest', 30)
+    assert jev.get_client('k1', 'jev-latest', 30) is a
+    assert jev.get_client('k2', 'jev-latest', 30) is not a
+    assert jev.get_client('k1', 'jev-x', 30) is not a
+    assert jev.get_client('k1', 'jev-latest', 10) is not a
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     failed = 0

@@ -1,6 +1,6 @@
 # jev_router
 
-Standalone TypeSafe Jev-based auto-routing for Agent Zero. Classifies each incoming chat message (task class, complexity, vision, delegation-worthiness) in one fast Jev batch and routes the LLM call to the best provider/model from your `_model_config` presets. Pure-code policy, never-raise fallback to the active preset on any failure.
+Standalone TypeSafe Jev-based auto-routing for Agent Zero. Classifies each incoming chat message (task class, complexity, vision, delegation-worthiness) in one fast Jev batch and routes the LLM call to the best provider/model from your `_model_config` presets. An optional mid-chat profile switcher re-evaluates the agent profile as the task changes. Pure-code policy, never-raise fallback to the active preset on any failure.
 
 No other plugins required: the plugin bundles its own Jev helper and installs the `typesafe-sdk` Python package automatically via its lifecycle hook.
 
@@ -32,6 +32,11 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - **Chat mentions**: per-message dials (`stop using zai`, `use venice`, `use free models`) with optional TTL (`tonight`, `today`, `for N hours`).
 - **Circuit breaker**: auto-excludes providers on `breaker_threshold` build failures; recovers on success or cooldown expiry. Overrides all other rules for health.
 
+### Dynamic Profile Switching (opt-in)
+- **Mid-chat switching**: from message 2, one Jev judgment per user message (while the chat is idle) checks the task class. A switch needs confidence >= `dynamic_switch_threshold`, `dynamic_switch_consecutive` matching judgments in a row, and the `dynamic_switch_cooldown_seconds` per-profile cooldown.
+- **Respects the user**: manual profile choices always win; only the main chat profile is switched; preselect owns message 1. Requires `delegation_mode: auto` and `chat_preselect: true`.
+- **Fail-safe**: any error keeps the current profile; decisions are logged under the `[dynamic-switch]` tag in the debug log.
+
 ### Telemetry & Auto-Tune (P2/P3)
 - **Real-call tracking**: Every routed model is instrumented at build time. Real API outcomes (ok/fail, duration, error) feed the circuit breaker and persist to the `calls` table.
 - **State-aware auto-tune**: Persisted `auto_tune` flag in `routing-policy.yaml`. When ON, the router ranks band orders from live call outcomes on every call (`[auto-tune]` tag in reasons). No manual Suggest needed.
@@ -39,7 +44,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 
 ### WebUI
 
-- **Settings modal** (`Settings → External → Jev Router`): routing on/off, API key with env fallback, Jev model, HTTP timeout, judgment budget, delegation threshold/mode, new-chat pre-selection, breaker threshold/cooldown.
+- **Settings modal** (`Settings → External → Jev Router`): routing on/off, API key with env fallback, Jev model, HTTP timeout, judgment budget, delegation threshold/mode, new-chat pre-selection, dynamic profile switching (toggle, confidence, streak, cooldown), breaker threshold/cooldown.
 - **Right-canvas panel**: Shows routing stream, circuit-breaker state with reset buttons, and provider exclude chips.
 - **State-aware chips**: Each provider chip shows live state (⛔ tripped / excluded / failing / healthy) with live actions (click to reset breaker or toggle exclude).
 - **Diff-guarded polling**: 20s auto-refresh only updates the DOM when data changes (no flash, no typing clobber).
@@ -52,9 +57,13 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - `jev_api_key` (""): TypeSafe API key; blank falls back to the `TYPESAFE_API_KEY` secret/env var.
 - `jev_model` (jev-latest): pin a Jev version available to your account.
 - `jev_timeout` (30): per-TypeSafe HTTP attempt, seconds (1–300).
-- `jev_timeout_s` (2.0): total judgment budget per message before falling back to the active preset.
+- `jev_timeout_s` (5.0): total judgment budget per message before falling back to the active preset.
 - `delegation_threshold` (0.6), `delegation_mode` (advise|auto).
 - `chat_preselect` (true): Jev suggests the agent profile for new chats.
+- `dynamic_switch_enabled` (false): opt-in mid-chat profile switching.
+- `dynamic_switch_threshold` (0.7): minimum Jev confidence for a judgment to count toward a switch.
+- `dynamic_switch_consecutive` (2): matching judgments in a row required before switching.
+- `dynamic_switch_cooldown_seconds` (30): minimum time between switches to the same profile.
 - `breaker_threshold` (3), `breaker_cooldown_hours` (1.0).
 
 ### `routing-policy.yaml`
@@ -77,12 +86,13 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 ```bash
 cd /a0 && for t in /a0/usr/plugins/jev_router/tests/test_*.py; do /opt/venv-a0/bin/python "$t"; done
 ```
-**21 suites, 203 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), and new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation).
+**23 suites, 233 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring).
 
 ## Safety boundaries
 - The hook **never raises**: any error keeps the framework model.
 - Embedding models are NOT routed (vector consistency).
 - Disabled config = zero behavior change.
+- Dynamic switching is opt-in and never overrides a manually chosen profile.
 - Single switch: the plugin toggle in Plugin Settings is the ONLY on/off.
 - No Jev client is built without a key: blank key + missing `TYPESAFE_API_KEY` = routing falls back to the active preset, logged.
 

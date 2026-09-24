@@ -2,6 +2,18 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.4.0] - 2026-09-24
+
+### Added
+- **Dynamic Profile Switching (opt-in):** mid-chat automatic profile switching from message 2. One Jev judgment per user message while the chat is idle; a switch requires confidence at or above `dynamic_switch_threshold`, `dynamic_switch_consecutive` matching judgments in a row, and the per-profile cooldown. Manual profile choices always win; only the main chat profile is switched; message 1 belongs to preselect. Never raises - any failure keeps the current profile.
+- **Settings UI:** new fields for dynamic switching (enable toggle, confidence threshold, consecutive count, cooldown) alongside the existing routing settings.
+
+### Changed
+- Default `jev_timeout_s` raised from 2.0 to 5.0 seconds: live telemetry showed the 2-second budget cutting off borderline judgments.
+- Live-presets pool test derives expectations from the presets file instead of hard-coded preset names, so user retuning cannot break the suite.
+- README documents dynamic profile switching, the four new settings, and updated test counts.
+
+
 ## [0.3.0] - 2026-09-23
 
 ### Added

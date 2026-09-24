@@ -93,5 +93,48 @@ def test_provider_call_stats():
         conn.close()
 
 
+
+def test_record_decision_persists_session_id():
+    from helpers.policy import Decision
+    from helpers.signals import Signals
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = telemetry.init_db(db)
+        d = Decision(None, 'light', 'test reason')
+        sig = Signals('chat', 1.0, 0.0, 0.0, 0.0)
+        telemetry.record_decision(conn, d, sig, 'dig1', session_id='ctx-1')
+        row = telemetry.last_decisions(conn, limit=1)[0]
+        assert row['session_id'] == 'ctx-1', dict(row)
+        conn.close()
+
+
+def test_init_db_migrates_legacy_schema_without_session_id():
+    import sqlite3
+    from helpers.policy import Decision
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 'old.db'
+        conn = sqlite3.connect(db)
+        conn.execute('''CREATE TABLE decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            msg_digest TEXT NOT NULL,
+            task_class TEXT,
+            complexity REAL,
+            band TEXT,
+            vision REAL,
+            delegate REAL,
+            target TEXT,
+            reason TEXT,
+            compromise INTEGER NOT NULL DEFAULT 0
+        )''')
+        conn.commit()
+        conn.close()
+        conn = telemetry.init_db(db)
+        telemetry.record_decision(
+            conn, Decision(None, 'light', 'r'), None, 'd2', session_id='s2')
+        row = telemetry.last_decisions(conn, limit=1)[0]
+        assert row['session_id'] == 's2', dict(row)
+        conn.close()
+
 if __name__ == '__main__':
     _main()

@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS decisions (
     delegate REAL,
     target TEXT,
     reason TEXT,
-    compromise INTEGER NOT NULL DEFAULT 0
+    compromise INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +37,17 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(Path(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _ensure_column(conn, 'decisions', 'session_id', 'TEXT')
     conn.commit()
     return conn
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str,
+                   decl: str) -> None:
+    """Legacy-DB migration: add a column when an existing table lacks it."""
+    cols = {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
+    if column not in cols:
+        conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {decl}')
 
 
 def record_decision(
@@ -45,11 +55,12 @@ def record_decision(
     decision: Decision,
     signals: Signals | None,
     msg_digest: str,
+    session_id: str = '',
 ) -> None:
     conn.execute(
         'INSERT INTO decisions (ts, msg_digest, task_class, complexity, band, '
-        'vision, delegate, target, reason, compromise) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'vision, delegate, target, reason, compromise, session_id) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             time.time(),
             msg_digest,
@@ -61,6 +72,7 @@ def record_decision(
             decision.entry.preset_name if decision.entry else None,
             decision.reason,
             1 if decision.compromise else 0,
+            str(session_id or ''),
         ),
     )
     conn.commit()

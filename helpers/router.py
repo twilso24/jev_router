@@ -20,12 +20,14 @@ def _digest(message: str) -> str:
     return hashlib.sha256(message.encode('utf-8', 'replace')).hexdigest()[:16]
 
 
-def _record_safe(db_path: Path, decision, sig, digest) -> str | None:
+def _record_safe(db_path: Path, decision, sig, digest,
+                 session_id: str = '') -> str | None:
     """Best-effort telemetry write; returns error string or None."""
     try:
         conn = telemetry.init_db(db_path)
         try:
-            telemetry.record_decision(conn, decision, sig, digest)
+            telemetry.record_decision(
+                conn, decision, sig, digest, session_id=session_id)
         finally:
             conn.close()
         return None
@@ -145,7 +147,7 @@ async def route(
                     f'fast-path: model factory failed ({exc}); keeping model',
                     True)
             if telemetry_path is not None:
-                _record_safe(telemetry_path, decision, pseudo, digest)
+                _record_safe(telemetry_path, decision, pseudo, digest, session_id=session_id)
             return RouteResult(
                 model, f'fast-path: trivial message; {decision.reason}', False)
 
@@ -164,7 +166,7 @@ async def route(
                 None, 'unknown',
                 'jev query failed; keeping active preset model')
             if telemetry_path is not None:
-                _record_safe(telemetry_path, decision, None, digest)
+                _record_safe(telemetry_path, decision, None, digest, session_id=session_id)
             return RouteResult(None, decision.reason, True)
 
         decision = policy_mod.resolve(sig, pool_entries, band_orders=band_orders)
@@ -177,7 +179,7 @@ async def route(
 
         if decision.entry is None:
             if telemetry_path is not None:
-                _record_safe(telemetry_path, decision, sig, digest)
+                _record_safe(telemetry_path, decision, sig, digest, session_id=session_id)
             return RouteResult(None, decision.reason, True, advice=advice)
 
         try:
@@ -187,11 +189,11 @@ async def route(
                 decision.entry.provider, threshold=thr, cooldown_hours=cd)
             reason = f'model factory failed for {decision.entry.preset_name} ({exc}); keeping model'
             if telemetry_path is not None:
-                _record_safe(telemetry_path, decision, sig, digest)
+                _record_safe(telemetry_path, decision, sig, digest, session_id=session_id)
             return RouteResult(None, reason, True, advice=advice)
 
         if telemetry_path is not None:
-            _record_safe(telemetry_path, decision, sig, digest)
+            _record_safe(telemetry_path, decision, sig, digest, session_id=session_id)
         return RouteResult(model, decision.reason, False, advice=advice)
 
     except Exception as exc:  # never raise out of the router
@@ -199,7 +201,7 @@ async def route(
             decision = policy_mod.Decision(
                 None, 'unknown', f'router error: {exc}; keeping model')
             if telemetry_path is not None:
-                _record_safe(telemetry_path, decision, None, digest)
+                _record_safe(telemetry_path, decision, None, digest, session_id=session_id)
         except Exception:
             pass
         return RouteResult(None, f'router error: {exc}; keeping model', True)

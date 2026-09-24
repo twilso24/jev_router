@@ -27,12 +27,16 @@ def test_config_html_binds_required_fields():
     html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
     for key in ['jev_api_key', 'jev_model', 'jev_timeout', 'jev_timeout_s',
                 'enabled', 'delegation_threshold', 'delegation_mode',
-                'chat_preselect', 'breaker_threshold', 'breaker_cooldown_hours']:
+                'chat_preselect', 'breaker_threshold', 'breaker_cooldown_hours',
+                'dynamic_switch_enabled', 'dynamic_switch_threshold',
+                'dynamic_switch_consecutive', 'dynamic_switch_cooldown_seconds']:
         assert f'config.{key}' in html, key
 
 def test_config_json_has_setting_keys():
     cfg = json.loads(_read(PLUGIN_ROOT / 'config.json'))
-    for key in ['jev_api_key', 'jev_model', 'jev_timeout', 'jev_timeout_s']:
+    for key in ['jev_api_key', 'jev_model', 'jev_timeout', 'jev_timeout_s',
+                'dynamic_switch_enabled', 'dynamic_switch_threshold',
+                'dynamic_switch_consecutive', 'dynamic_switch_cooldown_seconds']:
         assert key in cfg, key
 
 

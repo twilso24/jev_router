@@ -504,6 +504,26 @@ def test_auto_tune_routes_away_from_failing_preset():
     asyncio.run(run())
 
 
+
+def test_route_records_session_id():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 'tel.db'
+            res = await router.route(
+                cfg=_cfg(), entries=_mk_entries(),
+                policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.5)),
+                client=object(), jev_model='jev-latest',
+                model_factory=lambda e: 'M[' + e.preset_name + ']',
+                telemetry_path=db, session_id='ctx-sess-1')
+            assert res.fallback is False, res.reason
+            conn = telemetry.init_db(db)
+            row = telemetry.last_decisions(conn, limit=1)[0]
+            conn.close()
+            assert row['session_id'] == 'ctx-sess-1', dict(row)
+    asyncio.run(run())
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     failed = 0

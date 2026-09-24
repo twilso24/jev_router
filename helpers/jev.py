@@ -79,6 +79,35 @@ def validate_config(config):
     return model.strip(), timeout
 
 
+_CLIENT_CACHE: dict = {}
+_CLIENT_CACHE_MAX = 8
+
+
+def get_client(api_key, model, timeout):
+    """Shared AsyncTypeSafeClient per (key, model, timeout).
+
+    Both routing and switching hooks run per message; building a fresh HTTP
+    client each time wastes connections. Cache is bounded; any cache failure
+    falls back to a fresh client. Never raises on cache hit/miss itself."""
+    try:
+        k = (str(api_key or ''), str(model or ''), float(timeout or 30))
+        cached = _CLIENT_CACHE.get(k)
+        if cached is not None:
+            return cached
+        from typesafe_sdk import AsyncTypeSafeClient
+        client = AsyncTypeSafeClient(
+            api_key=k[0], model=k[1], timeout=k[2])
+        while len(_CLIENT_CACHE) >= _CLIENT_CACHE_MAX:
+            _CLIENT_CACHE.pop(next(iter(_CLIENT_CACHE)))
+        _CLIENT_CACHE[k] = client
+        return client
+    except Exception:
+        from typesafe_sdk import AsyncTypeSafeClient
+        return AsyncTypeSafeClient(
+            api_key=str(api_key or ''), model=str(model or ''),
+            timeout=float(timeout or 30))
+
+
 async def query(client, state, questions, model, timeout_s=2.0, on_error=None):
     """Run one Jev system_one call. Returns result dict or None on any failure.
 

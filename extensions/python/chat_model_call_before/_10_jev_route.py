@@ -230,13 +230,11 @@ class JevRouteChatCall(Extension):
 
     def _jev_client(self):
         import os
-        from typesafe_sdk import AsyncTypeSafeClient
         from usr.plugins.jev_router.helpers import jev as jev_mod
         cfg = self._jev_config()
         key = jev_mod.resolve_api_key(cfg, os.environ)
-        timeout = cfg.get('jev_timeout') or 30
-        return AsyncTypeSafeClient(
-            api_key=key, model=self._jev_model(), timeout=timeout)
+        timeout = float(cfg.get('jev_timeout') or 30)
+        return jev_mod.get_client(key, self._jev_model(), timeout)
 
     def _telemetry_path(self) -> Path:
         try:

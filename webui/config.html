@@ -63,6 +63,26 @@
       </div>
 
       <div class="field">
+        <div class="field-label"><label class="field-title" for="jev-dyn-switch">Dynamic profile switching</label><div class="field-description">Let Jev switch the agent profile mid-chat as the task changes (every user message, from message 2). Requires delegation mode auto and new-chat pre-selection.</div></div>
+        <div class="field-control"><input id="jev-dyn-switch" type="checkbox" x-model="config.dynamic_switch_enabled" /></div>
+      </div>
+
+      <div class="field">
+        <div class="field-label"><label class="field-title" for="jev-dyn-threshold">Switch confidence threshold</label><div class="field-description">Minimum Jev confidence for a judgment to count toward a profile switch. 0–1.</div></div>
+        <div class="field-control"><input id="jev-dyn-threshold" type="number" min="0" max="1" step="0.05" x-model.number="config.dynamic_switch_threshold" /></div>
+      </div>
+
+      <div class="field">
+        <div class="field-label"><label class="field-title" for="jev-dyn-consecutive">Consecutive matching messages</label><div class="field-description">Same task class must be judged this many messages in a row before a switch happens. 1–10.</div></div>
+        <div class="field-control"><input id="jev-dyn-consecutive" type="number" min="1" max="10" x-model.number="config.dynamic_switch_consecutive" /></div>
+      </div>
+
+      <div class="field">
+        <div class="field-label"><label class="field-title" for="jev-dyn-cooldown">Switch cooldown (seconds)</label><div class="field-description">Minimum time between switches to the same profile. Prevents flip-flopping.</div></div>
+        <div class="field-control"><input id="jev-dyn-cooldown" type="number" min="0" max="3600" step="5" x-model.number="config.dynamic_switch_cooldown_seconds" /></div>
+      </div>
+
+      <div class="field">
         <div class="field-label"><label class="field-title" for="jev-breaker-threshold">Circuit breaker threshold</label><div class="field-description">Consecutive provider failures before the breaker trips and excludes the provider.</div></div>
         <div class="field-control"><input id="jev-breaker-threshold" type="number" min="1" max="20" x-model.number="config.breaker_threshold" /></div>
       </div>
