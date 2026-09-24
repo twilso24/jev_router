@@ -15,7 +15,7 @@ Add mid-chat, **automatic profile switching** that re-evaluates the appropriate 
 
 ```bash
 # Tests
-cd /a0 && /opt/venv-a0/bin/python plugin/tests/test_dynamic_switch.py
+python tests/test_dynamic_switch.py
 
 # Live verification (after restart)
 cd /a0 && /opt/venv-a0/bin/python run_ui.py

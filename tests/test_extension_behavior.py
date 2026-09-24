@@ -18,7 +18,7 @@ from types import SimpleNamespace
 if '/a0' not in sys.path:
     sys.path.insert(0, '/a0')
 
-EXT_PATH = Path('/a0/usr/projects/jev_router/plugin/extensions/python/chat_model_call_before/_10_jev_route.py')
+EXT_PATH = Path(__file__).resolve().parents[1] / 'extensions/python/chat_model_call_before/_10_jev_route.py'
 
 
 def _load_ext():

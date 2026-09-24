@@ -13,8 +13,7 @@ from types import SimpleNamespace
 if '/a0' not in sys.path:
     sys.path.insert(0, '/a0')
 
-EXT_PATH = Path('/a0/usr/projects/jev_router/plugin/extensions/python/'
-                'user_message_ui/_20_jev_dynamic_switch.py')
+EXT_PATH = Path(__file__).resolve().parents[1] / 'extensions/python/user_message_ui/_20_jev_dynamic_switch.py'
 
 CFG = {'enabled': True, 'chat_preselect': True, 'delegation_mode': 'auto',
        'dynamic_switch_enabled': True, 'dynamic_switch_threshold': 0.7,
@@ -109,14 +108,14 @@ def _install_stubs():
 
     fspec = importlib.util.spec_from_file_location(
         'usr.plugins.jev_router.helpers.fastpath',
-        Path('/a0/usr/projects/jev_router/plugin/helpers/fastpath.py'))
+        Path(__file__).resolve().parents[1] / 'helpers/fastpath.py')
     fmod = importlib.util.module_from_spec(fspec)
     fspec.loader.exec_module(fmod)
     sys.modules['usr.plugins.jev_router.helpers.fastpath'] = fmod
 
     mspec = importlib.util.spec_from_file_location(
         'usr.plugins.jev_router.helpers.messages',
-        Path('/a0/usr/projects/jev_router/plugin/helpers/messages.py'))
+        Path(__file__).resolve().parents[1] / 'helpers/messages.py')
     mmod = importlib.util.module_from_spec(mspec)
     mspec.loader.exec_module(mmod)
     sys.modules['usr.plugins.jev_router.helpers.messages'] = mmod
@@ -124,7 +123,7 @@ def _install_stubs():
 
     spec = importlib.util.spec_from_file_location(
         'usr.plugins.jev_router.helpers.dynamic_switch',
-        Path('/a0/usr/projects/jev_router/plugin/helpers/dynamic_switch.py'))
+        Path(__file__).resolve().parents[1] / 'helpers/dynamic_switch.py')
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     sys.modules['usr.plugins.jev_router.helpers.dynamic_switch'] = mod

@@ -13,8 +13,7 @@ from types import SimpleNamespace
 if '/a0' not in sys.path:
     sys.path.insert(0, '/a0')
 
-EXT_PATH = Path('/a0/usr/projects/jev_router/plugin/extensions/python/'
-                'user_message_ui/_10_jev_preselect.py')
+EXT_PATH = Path(__file__).resolve().parents[1] / 'extensions/python/user_message_ui/_10_jev_preselect.py'
 
 CFG = {'enabled': True, 'chat_preselect': True, 'delegation_mode': 'auto',
        'jev_api_key': 'k', 'jev_model': 'jev-latest', 'jev_timeout_s': 2.0}
@@ -94,7 +93,7 @@ def _install_stubs():
 
     pspec = importlib.util.spec_from_file_location(
         'usr.plugins.jev_router.helpers.preselect',
-        Path('/a0/usr/projects/jev_router/plugin/helpers/preselect.py'))
+        Path(__file__).resolve().parents[1] / 'helpers/preselect.py')
     pmod = importlib.util.module_from_spec(pspec)
     pspec.loader.exec_module(pmod)
     sys.modules['usr.plugins.jev_router.helpers.preselect'] = pmod
