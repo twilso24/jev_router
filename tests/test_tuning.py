@@ -133,5 +133,31 @@ def test_read_auto_tune_invalid_falls_back_false():
         assert tuning.read_auto_tune(p2) is False
 
 
-if __name__ == '__main__':
-    _main()
+# --- auto-tune sparse-evidence floor (user intervention 2026-09-25) ---
+
+
+def test_suggest_sparse_evidence_keeps_current_orders():
+    """With only one observed call, auto-tune must NOT promote that preset
+    over the user's configured band orders (production bug: Default, ok=1,
+    jumped to position 1 of every band)."""
+    s = tuning.suggest_band_orders(
+        {'light': ['Fast', 'Default', 'Power'],
+         'medium': ['Default', 'Fast', 'Power'],
+         'heavy': ['Power', 'Default', 'Fast']},
+        ['Fast', 'Default', 'Power'],
+        {'Default': {'ok': 1, 'fail': 0}})
+    assert s['light'] == ['Fast', 'Default', 'Power']
+    assert s['medium'] == ['Default', 'Fast', 'Power']
+    assert s['heavy'] == ['Power', 'Default', 'Fast']
+
+
+def test_suggest_engages_once_evidence_sufficient():
+    """At or above the evidence floor, ranking resumes (failures last)."""
+    stats = {'Default': {'ok': 9, 'fail': 1},
+             'Power': {'ok': 4, 'fail': 0},
+             'Fast': {'ok': 3, 'fail': 0}}
+    s = tuning.suggest_band_orders(
+        {'light': ['Default', 'Power', 'Fast']},
+        ['Default', 'Power', 'Fast'], stats)
+    assert s['light'][0] != 'Default'  # failing preset demoted
+    assert s['light'][-1] == 'Default'
