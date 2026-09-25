@@ -120,6 +120,29 @@ def test_tuning_report_auto_tune_and_provider_states():
         assert ps['prov2']['fail'] == 1
 
 
+def test_tuning_report_unwired_and_wire_state():
+    with tempfile.TemporaryDirectory() as td:
+        policy = Path(td) / 'routing-policy.yaml'
+        policy.write_text(yaml.safe_dump({
+            'band_orders': {'light': ['Fast'], 'medium': ['Fast'],
+                            'heavy': ['Fast']},
+        }))
+        db = _mk_db(td, 1)
+        # sidecar absent -> wire_state None, unwired lists pool-missing name
+        rep = webui_data.tuning_report(db, policy, ['Fast', 'Storyteller'])
+        assert rep['unwired'] == ['Storyteller']
+        assert rep['wire_state'] is None
+        # sidecar present -> surfaced verbatim
+        state = {
+            'added': ['Storyteller'], 'pruned': ['Ghost'], 'ts': 123.456,
+        }
+        (Path(td) / 'wire-state.json').write_text(
+            __import__('json').dumps(state))
+        rep = webui_data.tuning_report(db, policy, ['Fast', 'Storyteller'])
+        assert rep['wire_state'] == state
+        assert rep['unwired'] == ['Storyteller']
+
+
 def test_tuning_report_auto_tune_off():
     with tempfile.TemporaryDirectory() as td:
         rep = webui_data.tuning_report(

@@ -29,6 +29,18 @@ class RoutingPolicy(ApiHandler):
                         **webui_data.tuning_report(
                             TELEMETRY_PATH, POLICY_PATH, presets,
                             pool_providers=providers)}
+            if action == 'wire_sync':
+                from usr.plugins.jev_router.helpers import auto_wire
+                presets = webui_data.pool_preset_names(PRESETS_PATH)
+                rep = auto_wire.sync_band_orders(
+                    POLICY_PATH, presets,
+                    POLICY_PATH.parent / 'wire-state.json')
+                return {'ok': True,
+                        'report': {'added': rep.added,
+                                   'pruned': rep.pruned,
+                                   'ts': rep.ts},
+                        'unwired': auto_wire.unwired_presets(
+                            POLICY_PATH, presets)}
             if action == 'set_auto_tune':
                 from usr.plugins.jev_router.helpers import tuning
                 ok = tuning.write_auto_tune(

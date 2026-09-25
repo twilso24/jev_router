@@ -15,6 +15,7 @@ from helpers.extension import Extension
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 DECISION_CACHE: Dict[str, tuple] = {}
 DECISION_CACHE_MAX = 32
+_LAST_WIRE_FP = None  # last pool fingerprint auto-wire synced against
 DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
 
 
@@ -159,6 +160,20 @@ class JevRouteChatCall(Extension):
 
             entries = _pool_entries()
             fingerprint = pool_mod.pool_fingerprint(entries)
+            # Auto-wire: keep band orders in sync with the live pool, once
+            # per pool change (fingerprint guard). Sync failures never
+            # affect routing.
+            global _LAST_WIRE_FP
+            if fingerprint != _LAST_WIRE_FP:
+                try:
+                    from usr.plugins.jev_router.helpers import auto_wire
+                    auto_wire.sync_band_orders(
+                        PLUGIN_ROOT / 'routing-policy.yaml',
+                        [e.preset_name for e in entries],
+                        PLUGIN_ROOT / 'wire-state.json')
+                except Exception as exc:
+                    _dbg('auto-wire sync failed: ' + str(exc))
+                _LAST_WIRE_FP = fingerprint
             _ctx = getattr(self, 'agent', None)
             session_id = str(
                 getattr(getattr(_ctx, 'context', None), 'id', '')

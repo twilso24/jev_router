@@ -29,6 +29,7 @@
       </div>
     </div>
     <div class="jev-tune-status" aria-live="polite"></div>
+    <div class="jev-wire" hidden aria-live="polite"></div>
     <div class="jev-tuning">Loading…</div>
   </section>
 
@@ -306,6 +307,33 @@
   background: var(--bg-danger);
   border-color: var(--bg-danger);
   color: var(--text-danger);
+  font-weight: 600;
+}
+
+.jev-wire {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.2rem 0 0.4rem 0;
+}
+
+.jev-wire[hidden] { display: none; }
+
+.jev-wire-chip {
+  font-family: var(--jev-mono);
+  font-size: 0.6875rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 99px;
+  border: 1px solid var(--border-panel);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.jev-wire-chip.add { color: var(--accent-primary); }
+.jev-wire-chip.prune { color: var(--text-danger); }
+.jev-wire-chip.warn {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
   font-weight: 600;
 }
 
@@ -722,6 +750,26 @@ function initPanel(root) {
     });
   };
 
+  const renderWire = (wire, unwired) => {
+    const box = q('.jev-wire');
+    if (!box) return;
+    const parts = [];
+    if (wire && Array.isArray(wire.added))
+      for (const n of wire.added) parts.push(['+ ' + n, 'add']);
+    if (wire && Array.isArray(wire.pruned))
+      for (const n of wire.pruned) parts.push(['− ' + n, 'prune']);
+    if (Array.isArray(unwired) && unwired.length)
+      parts.push(['unwired: ' + unwired.join(', '), 'warn']);
+    box.textContent = '';
+    if (!parts.length) { box.hidden = true; return; }
+    box.hidden = false;
+    for (const [label, cls] of parts) {
+      const chip = el('span', 'jev-wire-chip ' + cls, label);
+      chip.title = label;
+      box.appendChild(chip);
+    }
+  };
+
   const loadTuning = async () => {
     const st = q('.jev-tune-status');
     try {
@@ -731,7 +779,7 @@ function initPanel(root) {
       const at = q('.jev-autotune-toggle');
       if (at) at.checked = autoTune;
       const orders = autoTune ? (t.suggested || t.current) : t.current;
-      const sig = JSON.stringify([orders, t.stats || {}, t.provider_states || []]);
+      const sig = JSON.stringify([orders, t.stats || {}, t.provider_states || [], t.wire_state || null, t.unwired || []]);
       if (sig === lastTuneSig) return;
       lastTuneSig = sig;
       tuneOrders = JSON.parse(JSON.stringify(orders));
@@ -739,6 +787,7 @@ function initPanel(root) {
       provStates = Array.isArray(t.provider_states) ? t.provider_states : [];
       exclSet = new Set(provStates.filter(ps => ps.excluded).map(ps => ps.provider));
       if (!exclBusy) renderExcludes();
+      renderWire(t.wire_state, t.unwired);
       renderTuning();
       st.textContent = autoTune ? 'auto-tune on - ranked from live telemetry' : '';
       if (autoTune) setTimeout(() => { const s2 = q('.jev-tune-status'); if (s2) s2.textContent = ''; }, 3000);

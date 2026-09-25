@@ -123,9 +123,17 @@ def tuning_report(db_path: Path, policy_path: Path,
         'fail': (prov_stats.get(pr) or {}).get('fail', 0),
     } for pr in providers]
 
+    # Auto-wire visibility: presets missing from all band orders + last
+    # wire report (sidecar next to the policy file).
+    from . import auto_wire as auto_wire_mod
+    unwired = auto_wire_mod.unwired_presets(policy_path, pool_presets)
+    wire_state = auto_wire_mod.read_wire_state(
+        Path(policy_path).parent / 'wire-state.json')
+
     return {'current': current, 'suggested': suggested, 'stats': stats,
             'auto_tune': auto_tune, 'excludes': excludes,
-            'provider_states': provider_states}
+            'provider_states': provider_states,
+            'unwired': unwired, 'wire_state': wire_state}
 
 def pool_preset_names(presets_path: Path) -> list:
     """Live chat preset names from presets.yaml (pool source of truth)."""
