@@ -43,13 +43,23 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - **Band tuning**: Deterministic suggestion from telemetry (healthy first, failing last, current order breaks ties). Panel allows manual ▲▼ reorder and one-click Apply.
 - **Judgment observability and retry**: Jev failures log under `[signals]` with exception type, `elapsed_ms`, `timeout_s`, and `attempts=N`. A timed-out judgment is retried once (other errors fail fast) before falling back to the active preset.
 
+### Auto-Wire Presets
+
+Presets added to the chat pool become routable without hand-editing policy.
+
+- **Automatic wiring:** on the next routed call the router compares the live pool fingerprint with `routing-policy.yaml`, appends new presets to the **tail of every complexity band**, and prunes names that are no longer in the pool. One fingerprint change triggers one sync.
+- **Names stay opaque:** a new preset starts as a fallback candidate, so promote it in the panel (or the live policy) to give it a useful position; there is no task-class matching by name.
+- **Idempotent and never-raise:** an unchanged policy is not rewritten, and a failed sync never breaks routing.
+- **Panel visibility:** the Band Tuning card shows `+ added` / `- pruned` chips plus any presets that are still unwired.
+- **State sidecar:** `wire-state.json` records the last applied sync and is git-ignored because it is runtime state, not configuration.
+
 ### WebUI
 
 - **Settings modal** (`Settings → External → Jev Router`): routing on/off, API key with env fallback, Jev model, HTTP timeout, judgment budget, delegation threshold/mode, new-chat pre-selection, dynamic profile switching (toggle, confidence, streak, cooldown), breaker threshold/cooldown.
 - **Right-canvas panel**: Shows routing stream, circuit-breaker state with reset buttons, and provider exclude chips.
 - **State-aware chips**: Each provider chip shows live state (⛔ tripped / excluded / failing / healthy) with live actions (click to reset breaker or toggle exclude).
 - **Diff-guarded polling**: 20s auto-refresh only updates the DOM when data changes (no flash, no typing clobber).
-- **Endpoints**: `/api/plugins/jev_router/routing_stats`, `/routing_breaker`, `/routing_policy` (read/write/tuning/set_auto_tune).
+- **Endpoints**: `/api/plugins/jev_router/routing_stats`, `/routing_breaker`, `/routing_policy` (read/write/tuning/set_auto_tune/wire_sync).
 
 ## Configuration
 
@@ -85,9 +95,9 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 
 ## Tests
 ```bash
-cd /a0 && for t in /a0/usr/plugins/jev_router/tests/test_*.py; do /opt/venv-a0/bin/python "$t"; done
+cd /a0/usr/projects/jev_router && /opt/venv-a0/bin/python -m pytest tests/ -q
 ```
-**23 suites, 253 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring).
+**26 suites, 265 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring), auto-wiring (band-order sync, pruning, wire state, route-trigger wiring, and the policy API action), and per-file import isolation in the combined pytest run.
 
 ## Safety boundaries
 - The hook **never raises**: any error keeps the framework model.
@@ -100,4 +110,5 @@ cd /a0 && for t in /a0/usr/plugins/jev_router/tests/test_*.py; do /opt/venv-a0/b
 ## Development
 - **TDD mandatory**: failing test first, watch it fail, implement, watch it pass.
 - **Framework restart** required after changes to `helpers/` modules (sys.modules cache). Extensions hot-load per chat.
-- **Sync rule**: canonical `plugin/` syncs to deployed `/a0/usr/plugins/jev_router` only after tests pass. Runtime files (`routing-policy.yaml`, `config.json`) are excluded from syncs to preserve live edits.
+- **Test isolation**: `tests/conftest.py` isolates each test file's import environment so `python -m pytest tests/` matches per-file runs (the framework `helpers` namespace package is shadowed by the plugin's regular `helpers` package once the project root is on `sys.path`).
+- **Sync rule**: this canonical workspace syncs to deployed `/a0/usr/plugins/jev_router` only after tests pass. Runtime files (`routing-policy.yaml`, `config.json`) are excluded from syncs to preserve live edits.

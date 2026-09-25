@@ -2,6 +2,21 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.5.0] - 2026-09-25
+
+### Added
+- **Auto-wired presets (P4):** adding a preset to the chat pool now makes it routable without hand-editing policy. On the next routed call the router compares the live pool fingerprint with `routing-policy.yaml` and appends new preset names to the tail of every complexity band, pruning names that left the pool. Names stay opaque keys, so a new preset starts as a fallback candidate and is promoted from the panel.
+- **Sync visibility in the WebUI panel:** the Band Tuning card shows `+ added` / `- pruned` chips and any presets that are still unwired; `tuning_report` exposes `unwired` and `wire_state` and the policy API gained a `wire_sync` action.
+- **Fingerprint-guarded trigger:** the route extension syncs at most once per pool change, and a failed sync never breaks routing.
+- **Generated state sidecar:** `wire-state.json` records the last applied sync (git-ignored; runtime state only).
+
+### Fixed
+- **Combined pytest run is now order-independent:** `tests/conftest.py` gives each test file its own import environment (`sys.modules` / `sys.path`), so `python -m pytest tests/` matches per-file results. Root cause was structural: the framework `helpers` namespace package is shadowed by the plugin's regular `helpers` package once `python -m pytest` seeds the project root into `sys.path`. The previously recommended per-file loop is no longer required, and runtime policy/config stay excluded from syncs as before.
+
+### Changed
+- README documents auto-wire behavior, the `wire_sync` endpoint, the combined test command, and the import-isolation constraint.
+- `plugin.yaml` bumped to 0.5.0; generated `wire-state.json` ignored by git.
+
 ## [0.4.1] - 2026-09-24
 
 ### Fixed
