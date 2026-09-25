@@ -2,6 +2,19 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.6.0] - 2026-09-25
+
+### Added
+- **Fit-aware model selection (P5):** Jev judges a `preset_fit` choice over the live pool (with `preset_fit_confidence`) and a `profile_match` against the active agent profile. A confident fit (>= `fit_min_confidence`) wins the call with a `[fit]` tag only when it is in the judged band's order, present in the filtered pool, and vision-capable; every other case keeps the configured band decision byte-identical to before, and `fit_used` records whether the fit was honored.
+- **Profile-aware judgments:** the active agent profile (`agent.config.profile`) enters the Jev judgment state, joins the per-session decision cache key, and every decision row records `preset_fit`, `fit_confidence`, `profile_match`, and `fit_used` (idempotent SQLite migration for existing telemetry DBs).
+- **Settings UI:** new *Fit-aware model selection* toggle and *Fit confidence floor* (0-1) fields. Defaults: `fit_enabled: true`, `fit_min_confidence: 0.6`.
+- **Panel visibility:** recent decisions show `profile:<name>` and `fit` / `fit-skipped` chips; the stats API exposes the new fields.
+
+### Fixed
+- **Auto-tune no longer overrides curated orders on sparse data:** `suggest_band_orders` requires at least 10 total observed calls before re-ranking; below that evidence floor the configured band orders pass through unchanged. Previously a single healthy call promoted that preset to the head of every band on every routed call.
+- Telemetry schema aligned with spec: added `fit_confidence REAL` column alongside the fit fields.
+- Review hardening: orphaned legacy script runners removed from test files (pytest-only collection, no recursive re-runs), router fit-config read documented, `.jev-fit-skip` panel styling.
+
 ## [0.5.0] - 2026-09-25
 
 ### Added

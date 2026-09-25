@@ -37,6 +37,12 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - **Respects the user**: manual profile choices always win; only the main chat profile is switched; preselect owns message 1. Requires `delegation_mode: auto` and `chat_preselect: true`.
 - **Fail-safe**: any error keeps the current profile; decisions are logged under the `[dynamic-switch]` tag in the debug log.
 
+### Fit-Aware Model Selection (P5)
+- **Dynamic fit judgment**: Jev judges a `preset_fit` choice over the live pool (preset/provider/vision are in the judgment state) with `preset_fit_confidence`. A confident fit (>= `fit_min_confidence`, default 0.6) wins the call with a `[fit]` tag — but only when the pick is in the judged band's order, present in the filtered pool, and vision-capable. Every other case keeps the configured band decision unchanged.
+- **Profile-aware judgments**: the active agent profile enters the judgment state (`profile_match` judged per call) and joins the per-session decision cache key, so cached decisions never leak across profiles. Switching profiles remains dynamic-switch's opt-in job; fit only picks the model.
+- **Telemetry**: every decision row records `preset_fit`, `fit_confidence`, `profile_match`, and `fit_used` (idempotent SQLite migration for existing DBs).
+- **Settings UI**: *Fit-aware model selection* toggle + *Fit confidence floor* (0-1). Panel shows `profile:<name>` and `fit` / `fit-skipped` chips on recent decisions.
+
 ### Telemetry & Auto-Tune (P2/P3)
 - **Real-call tracking**: Every routed model is instrumented at build time. Real API outcomes (ok/fail, duration, error) feed the circuit breaker and persist to the `calls` table.
 - **State-aware auto-tune**: Persisted `auto_tune` flag in `routing-policy.yaml`. When ON, the router ranks band orders from live call outcomes on every call (`[auto-tune]` tag in reasons). No manual Suggest needed.
@@ -97,7 +103,7 @@ Presets added to the chat pool become routable without hand-editing policy.
 ```bash
 cd /a0/usr/projects/jev_router && /opt/venv-a0/bin/python -m pytest tests/ -q
 ```
-**26 suites, 265 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring), auto-wiring (band-order sync, pruning, wire state, route-trigger wiring, and the policy API action), and per-file import isolation in the combined pytest run.
+**26 suites, 303 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring), auto-wiring (band-order sync, pruning, wire state, route-trigger wiring, and the policy API action), per-file import isolation in the combined pytest run, and fit-aware routing (Jev fit/profile questions, constrained fit-honoring resolve, telemetry fit columns and migration, router config passthrough, extension profile wiring, and panel data exposure).
 
 ## Safety boundaries
 - The hook **never raises**: any error keeps the framework model.
