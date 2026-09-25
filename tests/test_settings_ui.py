@@ -40,15 +40,15 @@ def test_config_json_has_setting_keys():
         assert key in cfg, key
 
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
-    sys.exit(1 if failed else 0)
+
+
+def test_config_html_fit_settings():
+    html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
+    assert 'config.fit_enabled' in html, 'fit toggle must be in settings UI'
+    assert 'config.fit_min_confidence' in html, 'fit confidence floor must be in settings UI'
+
+
+def test_config_json_has_fit_defaults():
+    data = json.loads(_read(PLUGIN_ROOT / 'config.json'))
+    assert isinstance(data.get('fit_enabled'), bool)
+    assert 0 < float(data.get('fit_min_confidence')) <= 1

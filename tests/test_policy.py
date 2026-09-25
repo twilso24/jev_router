@@ -187,15 +187,79 @@ def test_boost_preferred_noop_without_match():
     assert boosted == orders
 
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
-    sys.exit(1 if failed else 0)
+
+
+# --- Fit-aware routing (T2): resolve honors a validated preset fit ---
+
+
+def _fsig(cls='coding', comp=1.5, vis=0.05, dele=0.5,
+          fit=None, fit_conf=0.0, prof=None):
+    return Signals(task_class=cls, task_class_confidence=0.9,
+                   complexity=comp, vision_needed=vis, delegate_worthy=dele,
+                   preset_fit=fit, preset_fit_confidence=fit_conf,
+                   profile_match=prof)
+
+
+def test_fit_confident_in_band_selects_fit_preset():
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.9), _entries())
+    assert d.entry.preset_name == 'Efficiency', d.reason
+    assert d.fit_used is True
+    assert '[fit]' in d.reason, d.reason
+    assert d.wanted == 'Power'  # wanted stays the band head
+
+
+def test_fit_low_confidence_keeps_legacy_decision():
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.5), _entries())
+    assert d.entry.preset_name == 'Power'
+    assert d.fit_used is False
+    assert '[fit]' not in d.reason
+
+
+def test_fit_not_in_band_order_ignored():
+    orders = {'heavy': ['Power', 'Default']}
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.9), _entries(),
+                       band_orders=orders)
+    assert d.entry.preset_name == 'Power'
+    assert d.fit_used is False
+
+
+def test_fit_not_in_pool_ignored():
+    d = policy.resolve(_fsig(fit='Ghost', fit_conf=0.99), _entries())
+    assert d.entry.preset_name == 'Power'
+    assert d.fit_used is False
+
+
+def test_fit_vision_incapable_ignored():
+    d = policy.resolve(_fsig(comp=1.8, vis=0.9, fit='Power', fit_conf=0.9),
+                       _entries())
+    assert d.entry.vision is True  # legacy vision deviation path
+    assert d.fit_used is False
+
+
+def test_fit_disabled_by_flag_uses_legacy():
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.9), _entries(),
+                       honor_fit=False)
+    assert d.entry.preset_name == 'Power'
+    assert d.fit_used is False
+
+
+def test_fit_custom_confidence_floor():
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.85), _entries(),
+                       fit_min_confidence=0.9)
+    assert d.entry.preset_name == 'Power'
+    d = policy.resolve(_fsig(fit='Efficiency', fit_conf=0.95), _entries(),
+                       fit_min_confidence=0.9)
+    assert d.entry.preset_name == 'Efficiency'
+    assert d.fit_used is True
+
+
+def test_fit_absent_reason_equals_legacy():
+    d = policy.resolve(_fsig(), _entries())
+    legacy = policy.resolve(_fsig(), _entries(), honor_fit=False)
+    assert d.entry.preset_name == legacy.entry.preset_name
+    assert d.reason == legacy.reason
+
+
+def test_decision_fit_used_defaults_false():
+    d = policy.Decision(None, 'light', 'x')
+    assert d.fit_used is False

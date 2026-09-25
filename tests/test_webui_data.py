@@ -152,14 +152,47 @@ def test_tuning_report_auto_tune_off():
         assert rep['provider_states'][0]['provider'] == 'p1'
 
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
+# --- T6: panel data exposes fit/profile judgment fields ---
+import tempfile
+from pathlib import Path
+
+from helpers import telemetry, webui_data
+from helpers.policy import Decision
+from helpers.signals import Signals
+
+
+def _fit_db(td):
+    db = Path(td) / 't.db'
+    conn = telemetry.init_db(db)
+    sig = Signals(task_class='coding', task_class_confidence=0.9,
+                  complexity=1.5, vision_needed=0.0, delegate_worthy=0.1,
+                  preset_fit='Efficiency', preset_fit_confidence=0.9,
+                  profile_match='developer')
+    d = Decision(None, 'heavy', 'reason text')
+    d.fit_used = True
+    telemetry.record_decision(conn, d, sig, 'dig')
+    conn.close()
+    return db
+
+
+def test_stats_recent_includes_fit_fields():
+    with tempfile.TemporaryDirectory() as td:
+        out = webui_data.stats_from_db(_fit_db(td))
+        row = out['recent'][0]
+        assert row['preset_fit'] == 'Efficiency'
+        assert row['profile_match'] == 'developer'
+        assert row['fit_used'] is True
+
+
+def test_stats_recent_fit_fields_absent_when_no_signals():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = telemetry.init_db(db)
+        d = Decision(None, 'unknown', 'jev query failed')
+        telemetry.record_decision(conn, d, None, 'dig')
+        conn.close()
+        out = webui_data.stats_from_db(db)
+        row = out['recent'][0]
+        assert row['preset_fit'] is None
+        assert row['profile_match'] is None
+        assert row['fit_used'] is False

@@ -24,6 +24,10 @@ def stats_from_db(db_path: Path, limit: int = 20) -> dict:
         'target': r['target'],
         'reason': r['reason'],
         'compromise': bool(r['compromise']),
+        'preset_fit': r['preset_fit'] if 'preset_fit' in r.keys() else None,
+        'profile_match': (r['profile_match']
+                          if 'profile_match' in r.keys() else None),
+        'fit_used': bool(r['fit_used']) if 'fit_used' in r.keys() else False,
     } for r in rows]
 
     by_preset: dict = {}

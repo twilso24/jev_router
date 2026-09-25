@@ -138,15 +138,41 @@ def test_sync_failure_never_breaks_routing():
     assert call_data['model'] == 'FAKE_MODEL', 'routing must survive sync failure'
 
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
-    sys.exit(1 if failed else 0)
+
+
+# --- T5: agent profile read, cache-key segment, route passthrough ---
+
+
+def test_extension_reads_profile_and_passes_to_route():
+    sync_calls = []
+    ext_mod = _load_ext('fp1', sync_calls)
+    captured = {}
+
+    async def fake_route2(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model='FAKE_MODEL', reason='r',
+                               fallback=False, advice=None)
+
+    sys.modules['usr.plugins.jev_router.helpers.router'].route = fake_route2
+    ext = _make_ext(ext_mod, {'enabled': True, 'jev_api_key': 'k'})
+    ext.agent = SimpleNamespace(
+        config=SimpleNamespace(profile='developer'),
+        context=SimpleNamespace(id='sess-wire'))
+    _run(ext)
+    assert captured.get('agent_profile') == 'developer', captured.get('agent_profile')
+
+
+def test_extension_defaults_profile_when_missing():
+    sync_calls = []
+    ext_mod = _load_ext('fp1', sync_calls)
+    captured = {}
+
+    async def fake_route3(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model='FAKE_MODEL', reason='r',
+                               fallback=False, advice=None)
+
+    sys.modules['usr.plugins.jev_router.helpers.router'].route = fake_route3
+    ext = _make_ext(ext_mod, {'enabled': True, 'jev_api_key': 'k'})
+    _run(ext)
+    assert captured.get('agent_profile', '') == ''

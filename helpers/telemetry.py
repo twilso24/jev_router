@@ -19,7 +19,11 @@ CREATE TABLE IF NOT EXISTS decisions (
     target TEXT,
     reason TEXT,
     compromise INTEGER NOT NULL DEFAULT 0,
-    session_id TEXT
+    session_id TEXT,
+    preset_fit TEXT,
+    profile_match TEXT,
+    fit_used INTEGER NOT NULL DEFAULT 0,
+    fit_confidence REAL
 );
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +42,11 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     _ensure_column(conn, 'decisions', 'session_id', 'TEXT')
+    _ensure_column(conn, 'decisions', 'preset_fit', 'TEXT')
+    _ensure_column(conn, 'decisions', 'profile_match', 'TEXT')
+    _ensure_column(conn, 'decisions', 'fit_used',
+                   'INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(conn, 'decisions', 'fit_confidence', 'REAL')
     conn.commit()
     return conn
 
@@ -59,8 +68,9 @@ def record_decision(
 ) -> None:
     conn.execute(
         'INSERT INTO decisions (ts, msg_digest, task_class, complexity, band, '
-        'vision, delegate, target, reason, compromise, session_id) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'vision, delegate, target, reason, compromise, session_id, '
+        'preset_fit, profile_match, fit_used, fit_confidence) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             time.time(),
             msg_digest,
@@ -73,6 +83,10 @@ def record_decision(
             decision.reason,
             1 if decision.compromise else 0,
             str(session_id or ''),
+            signals.preset_fit if signals else None,
+            signals.profile_match if signals else None,
+            1 if decision.fit_used else 0,
+            float(signals.preset_fit_confidence) if signals else None,
         ),
     )
     conn.commit()

@@ -60,6 +60,7 @@ async def route(
     model_factory,
     telemetry_path: Path | None = None,
     session_id: str = '',
+    agent_profile: str = '',
 ) -> RouteResult:
     digest = _digest(message or '')
     try:
@@ -68,6 +69,10 @@ async def route(
 
         pol = eligibility.load_policy(policy_path)
         band_orders = policy_mod.load_band_orders(policy_path)
+        # fit_min_conf is cfg-driven; the 0.6 resolve() default applies
+        # only to API callers that do not pass it explicitly.
+        fit_enabled = bool(cfg.get('fit_enabled', False))
+        fit_min_conf = float(cfg.get('fit_min_confidence', 0.6))
         filtered = eligibility.filter_pool(entries, pol)
         pool_entries = filtered.kept
 
@@ -131,7 +136,7 @@ async def route(
             pseudo = Signals(task_class='chat', task_class_confidence=1.0,
                              complexity=0.0, vision_needed=0.0,
                              delegate_worthy=0.0)
-            decision = policy_mod.resolve(pseudo, pool_entries, band_orders=band_orders)
+            decision = policy_mod.resolve(pseudo, pool_entries, band_orders=band_orders, honor_fit=fit_enabled, fit_min_confidence=fit_min_conf)
             decision.reason += sched_tag + mention_tag + breaker_tag + auto_tag
             if decision.entry is None:
                 return RouteResult(
@@ -160,6 +165,7 @@ async def route(
             model=jev_model,
             timeout_s=float(cfg.get('jev_timeout_s', 2.0)),
             pool_entries=pool_entries,
+            agent_profile=agent_profile,
         )
         if sig is None:
             decision = policy_mod.Decision(
@@ -169,7 +175,7 @@ async def route(
                 _record_safe(telemetry_path, decision, None, digest, session_id=session_id)
             return RouteResult(None, decision.reason, True)
 
-        decision = policy_mod.resolve(sig, pool_entries, band_orders=band_orders)
+        decision = policy_mod.resolve(sig, pool_entries, band_orders=band_orders, honor_fit=fit_enabled, fit_min_confidence=fit_min_conf)
         decision.reason += sched_tag + mention_tag + breaker_tag + auto_tag
         advice = None
         gate_res = gate_mod.evaluate(sig, cfg)

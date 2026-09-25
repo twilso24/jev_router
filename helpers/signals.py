@@ -25,6 +25,9 @@ class Signals:
     complexity: float          # 0..2 score
     vision_needed: float       # noul 0..1
     delegate_worthy: float     # noul 0..1
+    preset_fit: str | None = None        # Jev's best-fit preset, if asked
+    preset_fit_confidence: float = 0.0   # 0.0 when absent/invalid
+    profile_match: float | None = None   # noul: active profile fits the task
 
 
 TASK_CLASSES = {
@@ -39,8 +42,9 @@ TASK_CLASSES = {
 }
 
 
-def build_questions() -> dict:
-    return {
+def build_questions(pool_entries: list | None = None,
+                    agent_profile: str = '') -> dict:
+    questions = {
         'task_class': {
             'type': 'choice',
             'instructions': 'Classify the primary nature of the user message.',
@@ -64,16 +68,53 @@ def build_questions() -> dict:
             'instructions': 'Would a dedicated specialist agent with a fresh context handle this task better than a generalist continuing this chat?',
         },
     }
+    # preset_fit: a choice needs alternatives, so only with 2+ presets.
+    try:
+        options = []
+        seen = set()
+        for e in (pool_entries or []):
+            name = str(getattr(e, 'preset_name', '') or '')
+            if name and name not in seen:
+                seen.add(name)
+                options.append((name, e))
+        if len(options) >= 2:
+            questions['preset_fit'] = {
+                'type': 'choice',
+                'instructions': (
+                    'Which available preset fits this message best? '
+                    'Consider task type, capability needs and cost tier.'),
+                'criteria': {
+                    name: (f'provider={getattr(e, "provider", "?")}, '
+                           f'model={getattr(e, "model", "?")}, '
+                           'vision=' + (
+                               'yes' if getattr(e, 'vision', False)
+                               else 'no'))
+                    for name, e in options
+                },
+            }
+    except Exception:
+        pass
+    profile = str(agent_profile or '').strip()
+    if profile:
+        questions['profile_match'] = {
+            'type': 'noul',
+            'instructions': (
+                f'Is the active agent profile {profile!r} a good match for '
+                'this message and its task?'),
+        }
+    return questions
 
 
 def build_state(message: str, attachments: list,
-                pool_entries: list | None = None) -> dict:
+                pool_entries: list | None = None,
+                agent_profile: str = '') -> dict:
     note = ('Routing judgment for one incoming user message in an AI '
             'assistant chat.')
     state = {
         'message': message,
         'attachments': list(attachments or []),
         'note': note,
+        'agent_profile': str(agent_profile or ''),
     }
     if pool_entries:
         state['available_models'] = [
@@ -92,7 +133,7 @@ def _num(value) -> float | None:
     return float(value)
 
 
-def _parse(result: dict) -> Signals | None:
+def _parse(result: dict, fit_options: list | None = None) -> Signals | None:
     try:
         answers = result['answers']
         tc = answers['task_class']
@@ -107,12 +148,37 @@ def _parse(result: dict) -> Signals | None:
         dele = _num(dw.get('noul'))
         if conf is None or comp is None or vis is None or dele is None:
             return None
+        # Optional answers: absent, malformed or out-of-options values fall
+        # back to neutral defaults and never fail the batch.
+        fit, fit_conf = None, 0.0
+        try:
+            fa = answers.get('preset_fit') or {}
+            if isinstance(fa, dict) and fa.get('type') == 'choice':
+                choice = fa.get('choice')
+                opts = [str(o) for o in (fit_options or [])]
+                if (isinstance(choice, str) and choice
+                        and (not opts or choice in opts)):
+                    fit = choice
+                    c = _num(fa.get('confidence'))
+                    fit_conf = c if c is not None else 0.0
+        except Exception:
+            fit, fit_conf = None, 0.0
+        prof = None
+        try:
+            pa = answers.get('profile_match') or {}
+            if isinstance(pa, dict) and pa.get('type') == 'noul':
+                prof = _num(pa.get('noul'))
+        except Exception:
+            prof = None
         return Signals(
             task_class=tc['choice'],
             task_class_confidence=conf,
             complexity=comp,
             vision_needed=vis,
             delegate_worthy=dele,
+            preset_fit=fit,
+            preset_fit_confidence=fit_conf,
+            profile_match=prof,
         )
     except (KeyError, TypeError, AttributeError):
         return None
@@ -127,6 +193,7 @@ async def judge(
     timeout_s: float = 2.0,
     pool_entries: list | None = None,
     retries: int = 1,
+    agent_profile: str = '',
 ) -> Signals | None:
     """Run the routing batch. Returns Signals or None on any failure.
 
@@ -141,8 +208,11 @@ async def judge(
             result = await asyncio.wait_for(
                 query_fn(
                     client,
-                    build_state(message, attachments, pool_entries=pool_entries),
-                    build_questions(),
+                    build_state(message, attachments,
+                                pool_entries=pool_entries,
+                                agent_profile=agent_profile),
+                    build_questions(pool_entries=pool_entries,
+                                    agent_profile=agent_profile),
                     model,
                 ),
                 timeout=timeout_s,
@@ -164,4 +234,7 @@ async def judge(
                  f'elapsed_ms={elapsed_ms} timeout_s={timeout_s} '
                  f'attempts={attempt}')
             return None
-        return _parse(result)
+        fit_options = sorted({
+            str(getattr(e, 'preset_name', '') or '')
+            for e in (pool_entries or [])} - {''})
+        return _parse(result, fit_options=fit_options)

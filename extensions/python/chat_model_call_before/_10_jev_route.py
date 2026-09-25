@@ -181,7 +181,9 @@ class JevRouteChatCall(Extension):
             sess_sig = hashlib.sha256(','.join(
                 mentions_mod.session_excludes(session_id)).encode(
                 'utf-8', 'replace')).hexdigest()[:8]
-            cache_key = f'{digest}:{fingerprint}:{sess_sig}'
+            agent_profile = str(
+                getattr(getattr(_ctx, 'config', None), 'profile', '') or '')
+            cache_key = f'{digest}:{fingerprint}:{sess_sig}:{agent_profile}'
             cached = DECISION_CACHE.get(cache_key)
             if cached is not None:
                 model, reason = cached
@@ -205,6 +207,7 @@ class JevRouteChatCall(Extension):
                 model_factory=_make_model_factory(self),
                 telemetry_path=self._telemetry_path(),
                 session_id=session_id,
+                agent_profile=agent_profile,
             )
 
             _dbg(f'routed fallback={result.fallback} reason={result.reason[:80]}')

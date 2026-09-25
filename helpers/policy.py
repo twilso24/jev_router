@@ -28,6 +28,7 @@ class Decision:
     reason: str
     compromise: bool = False
     wanted: str | None = None
+    fit_used: bool = False
 
 
 def complexity_band(score: float) -> str:
@@ -80,7 +81,9 @@ def boost_preferred(orders: dict, entries: list[PoolEntry],
 
 
 def resolve(sig: Signals, entries: list[PoolEntry],
-            band_orders: dict | None = None) -> Decision:
+            band_orders: dict | None = None,
+            honor_fit: bool = True,
+            fit_min_confidence: float = 0.6) -> Decision:
     band = complexity_band(sig.complexity)
     if not entries:
         return Decision(None, band, 'empty pool: no eligible entries')
@@ -88,6 +91,26 @@ def resolve(sig: Signals, entries: list[PoolEntry],
     orders = band_orders or DEFAULT_BAND_ORDERS
     wanted = orders.get(band) or DEFAULT_BAND_ORDERS[band]
     vision_hard = sig.vision_needed > VISION_THRESHOLD
+
+    # Jev's dynamic fit pick: honored only when confident, listed in this
+    # band's order, present in the filtered pool, and vision-capable when
+    # vision is required. Any other case keeps the legacy decision below.
+    if honor_fit and sig.preset_fit:
+        try:
+            confident = float(sig.preset_fit_confidence) >= float(
+                fit_min_confidence)
+        except (TypeError, ValueError):
+            confident = False
+        fit_entry = by_preset.get(sig.preset_fit)
+        if (confident and fit_entry is not None
+                and sig.preset_fit in wanted
+                and not (vision_hard and not fit_entry.vision)):
+            chosen = (f'preset {fit_entry.preset_name} '
+                      f'({fit_entry.provider}/{fit_entry.model})')
+            reason = (f'task_class={sig.task_class} band={band} -> '
+                      f'{chosen} [fit]')
+            return Decision(fit_entry, band, reason,
+                            wanted=wanted[0], fit_used=True)
 
     deviated_missing = False
     deviated_vision = False

@@ -1,6 +1,7 @@
 # TDD RED: persisted call outcomes + tuning report composition.
 # telemetry.calls table and webui_data.tuning_report do not exist yet.
 # Run: /opt/venv-a0/bin/python tests/test_telemetry_calls.py
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -136,5 +137,86 @@ def test_init_db_migrates_legacy_schema_without_session_id():
         assert row['session_id'] == 's2', dict(row)
         conn.close()
 
-if __name__ == '__main__':
-    _main()
+
+# --- T3: fit/profile telemetry columns + legacy migration ---
+from helpers.policy import Decision
+from helpers.signals import Signals
+
+
+def test_decisions_fit_columns_exist_after_init():
+    with tempfile.TemporaryDirectory() as td:
+        conn = telemetry.init_db(Path(td) / 't.db')
+        cols = {r['name'] for r in conn.execute('PRAGMA table_info(decisions)')}
+        conn.close()
+        assert {'preset_fit', 'profile_match', 'fit_used'} <= cols
+
+
+def test_record_decision_persists_fit_fields():
+    with tempfile.TemporaryDirectory() as td:
+        conn = telemetry.init_db(Path(td) / 't.db')
+        sig = Signals(task_class='coding', task_class_confidence=0.9,
+                      complexity=1.5, vision_needed=0.0, delegate_worthy=0.1,
+                      preset_fit='Efficiency', preset_fit_confidence=0.9,
+                      profile_match='developer')
+        d = Decision(None, 'heavy', 'reason text')
+        d.fit_used = True
+        telemetry.record_decision(conn, d, sig, 'dig')
+        row = telemetry.last_decisions(conn, 1)[0]
+        conn.close()
+        assert row['preset_fit'] == 'Efficiency'
+        assert row['profile_match'] == 'developer'
+        assert row['fit_used'] == 1
+
+
+def test_record_decision_none_signals_nulls_fit_fields():
+    with tempfile.TemporaryDirectory() as td:
+        conn = telemetry.init_db(Path(td) / 't.db')
+        d = Decision(None, 'unknown', 'jev query failed')
+        telemetry.record_decision(conn, d, None, 'dig')
+        row = telemetry.last_decisions(conn, 1)[0]
+        conn.close()
+        assert row['preset_fit'] is None
+        assert row['profile_match'] is None
+        assert row['fit_used'] == 0
+
+
+def test_legacy_db_migration_idempotent():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        raw = sqlite3.connect(db)
+        raw.executescript('''
+            CREATE TABLE decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                msg_digest TEXT NOT NULL,
+                task_class TEXT,
+                complexity REAL,
+                band TEXT,
+                vision REAL,
+                delegate REAL,
+                target TEXT,
+                reason TEXT,
+                compromise INTEGER NOT NULL DEFAULT 0
+            );
+        ''')
+        raw.commit()
+        raw.close()
+        telemetry.init_db(db)
+        conn = telemetry.init_db(db)  # second init: no-op, must not raise
+        cols = {r['name'] for r in conn.execute('PRAGMA table_info(decisions)')}
+        conn.close()
+        assert {'session_id', 'preset_fit', 'profile_match', 'fit_used'} <= cols
+
+
+def test_record_decision_persists_fit_confidence():
+    with tempfile.TemporaryDirectory() as td:
+        conn = telemetry.init_db(Path(td) / 't.db')
+        sig = Signals(task_class='coding', task_class_confidence=0.9,
+                      complexity=1.5, vision_needed=0.0, delegate_worthy=0.1,
+                      preset_fit='Efficiency', preset_fit_confidence=0.92,
+                      profile_match='developer')
+        d = Decision(None, 'heavy', 'r')
+        telemetry.record_decision(conn, d, sig, 'dig')
+        row = telemetry.last_decisions(conn, 1)[0]
+        conn.close()
+        assert row['fit_confidence'] == 0.92

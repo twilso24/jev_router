@@ -476,10 +476,12 @@ def test_auto_tune_routes_away_from_failing_preset():
             }))
             db = Path(td) / 'tel.db'
             conn = telemetry.init_db(db)
-            # Power failing (below breaker threshold 3 -> not tripped)
+            # Power failing (below breaker threshold 3 -> not tripped).
+            # 10 observed calls total so auto-tune's evidence floor is met
+            # (below the floor it intentionally keeps current orders).
             telemetry.record_call(conn, 'zai_coding', 'Power', False, 0.1, 'e1')
             telemetry.record_call(conn, 'zai_coding', 'Power', False, 0.1, 'e2')
-            for _ in range(3):
+            for _ in range(8):
                 telemetry.record_call(conn, 'a0_venice', 'Unhinged', True, 0.1, None)
             conn.close()
             res = await router.route(
@@ -524,15 +526,59 @@ def test_route_records_session_id():
             assert row['session_id'] == 'ctx-sess-1', dict(row)
     asyncio.run(run())
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
-    sys.exit(1 if failed else 0)
+
+
+def test_router_passes_agent_profile_to_judge():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            captured = {}
+
+            async def q(client, state, questions, model):
+                captured['profile'] = (state or {}).get('agent_profile')
+                inner = _fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.5))
+                return await inner(client, state, questions, model)
+
+            res = await router.route(
+                cfg=_cfg(), entries=_mk_entries(),
+                policy_path=Path(td) / 'p.yaml',
+                message='please analyze and refactor the authentication module across files',
+                attachments=[], query_fn=q,
+                client=object(), jev_model='jev-latest',
+                model_factory=lambda e: f'MODEL[{e.preset_name}]',
+                telemetry_path=Path(td) / 't.db',
+                agent_profile='developer')
+            assert captured['profile'] == 'developer', captured
+            assert res.model == 'MODEL[Power]', res.reason
+    asyncio.run(run())
+
+def test_router_passes_fit_config_to_resolve():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            captured = {}
+            from helpers.policy import Decision
+            def fake_resolve(sig, entries, band_orders=None, honor_fit=None, fit_min_confidence=None):
+                captured.update({
+                    'honor_fit': honor_fit,
+                    'fit_min_confidence': fit_min_confidence
+                })
+                return Decision(None, 'heavy', 'r')
+
+            import helpers.policy as p_mod
+            old_resolve = p_mod.resolve
+            p_mod.resolve = fake_resolve
+            try:
+                res = await router.route(
+                    cfg={'enabled': True, 'fit_enabled': True, 'fit_min_confidence': 0.8, 'jev_timeout_s': 2.0},
+                    entries=_mk_entries(),
+                    policy_path=Path(td) / 'p.yaml',
+                    message='test fit config pass',
+                    attachments=[],
+                    query_fn=_fake_query(Signals('coding', 0.9, 0.9, 0.0, 0.0)),
+                    client=object(), jev_model='jev-latest',
+                    model_factory=lambda e: f'MODEL[{e.preset_name}]',
+                    telemetry_path=Path(td) / 't.db')
+                assert captured.get('honor_fit') is True
+                assert captured.get('fit_min_confidence') == 0.8
+            finally:
+                p_mod.resolve = old_resolve
+    asyncio.run(run())

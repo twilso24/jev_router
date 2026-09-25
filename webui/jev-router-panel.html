@@ -231,6 +231,7 @@
 .band-unknown { background: var(--bg-hover); color: var(--text-secondary); }
 
 .jev-panel.no-chips .jev-chip { display: none; }
+.jev-fit-skip { opacity: 0.5; }
 
 .jev-decision-reason {
   font-size: 0.6875rem;
@@ -550,6 +551,8 @@ function decisionRow(d) {
   top.appendChild(el('span', 'jev-ts', fmtTs(d.ts)));
   row.appendChild(top);
   if (d.reason) row.appendChild(el('div', 'jev-decision-reason', d.reason));
+  if (d.profile_match) top.appendChild(el('span', 'jev-chip', 'profile:' + d.profile_match));
+  if (d.preset_fit) top.appendChild(el('span', 'jev-chip' + (d.fit_used ? '' : ' jev-fit-skip'), d.fit_used ? 'fit' : 'fit-skipped'));
   return row;
 }
 

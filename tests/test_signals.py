@@ -214,15 +214,142 @@ def test_non_timeout_error_is_not_retried():
         restore()
 
 
-if __name__ == '__main__':
-    tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f'PASS {t.__name__}')
-        except Exception as exc:
-            failed += 1
-            print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
-    print(f'--- {len(tests) - failed}/{len(tests)} passed')
-    sys.exit(1 if failed else 0)
+
+
+# --- Fit-aware routing & profile-aware judgments (T1) ---
+
+
+def _entries():
+    from helpers.pool import PoolEntry
+    return [
+        PoolEntry('Fast', 'chat', 'openrouter', 'm1', vision=False),
+        PoolEntry('Story', 'chat', 'a0_venice', 'aion', vision=True),
+    ]
+
+
+def _fit_result(fit='Story', conf=0.8, profile=0.9):
+    r = _ok_result()
+    r['answers']['preset_fit'] = {
+        'type': 'choice', 'choice': fit, 'confidence': conf,
+        'probabilities': {fit: conf}}
+    r['answers']['profile_match'] = {'type': 'noul', 'noul': profile}
+    return r
+
+
+def test_build_questions_default_returns_core_four():
+    q = signals.build_questions()
+    assert set(q) == {'task_class', 'complexity', 'vision_needed',
+                      'delegate_worthy'}
+
+
+def test_build_questions_pool_adds_preset_fit_choice():
+    q = signals.build_questions(pool_entries=_entries())
+    fit = q.get('preset_fit')
+    assert fit and fit['type'] == 'choice'
+    assert set(fit['criteria']) == {'Fast', 'Story'}
+    assert 'a0_venice' in fit['criteria']['Story']
+    assert 'vision' in fit['criteria']['Story']
+
+
+def test_build_questions_single_preset_skips_fit():
+    from helpers.pool import PoolEntry
+    q = signals.build_questions(pool_entries=[PoolEntry('Only', 'chat', 'p', 'm')])
+    assert 'preset_fit' not in q
+
+
+def test_build_questions_profile_adds_profile_match():
+    q = signals.build_questions(agent_profile='developer')
+    pm = q.get('profile_match')
+    assert pm and pm['type'] == 'noul'
+    assert 'developer' in pm['instructions']
+
+
+def test_build_questions_no_profile_skips_profile_match():
+    assert 'profile_match' not in signals.build_questions()
+
+
+def test_build_state_carries_profile():
+    state = signals.build_state('hi', [], agent_profile='hacker')
+    assert state['agent_profile'] == 'hacker'
+    assert signals.build_state('hi', [])['agent_profile'] == ''
+
+
+def test_signals_new_fields_default_off():
+    s = signals.Signals(task_class='chat', task_class_confidence=1.0,
+                        complexity=0.0, vision_needed=0.0, delegate_worthy=0.0)
+    assert s.preset_fit is None
+    assert s.preset_fit_confidence == 0.0
+    assert s.profile_match is None
+
+
+def test_parse_tolerates_missing_fit_answers():
+    s = signals._parse(_ok_result())
+    assert s is not None
+    assert s.preset_fit is None
+    assert s.preset_fit_confidence == 0.0
+    assert s.profile_match is None
+
+
+def test_parse_reads_valid_fit_and_profile():
+    s = signals._parse(_fit_result(), fit_options=['Fast', 'Story'])
+    assert s.preset_fit == 'Story'
+    assert s.preset_fit_confidence == 0.8
+    assert s.profile_match == 0.9
+
+
+def test_parse_rejects_fit_outside_options():
+    s = signals._parse(_fit_result(fit='Ghost'), fit_options=['Fast', 'Story'])
+    assert s.preset_fit is None
+    assert s.preset_fit_confidence == 0.0
+
+
+def test_parse_fit_confidence_defaults_to_zero():
+    r = _fit_result()
+    del r['answers']['preset_fit']['confidence']
+    s = signals._parse(r, fit_options=['Story'])
+    assert s.preset_fit == 'Story'
+    assert s.preset_fit_confidence == 0.0
+
+
+def test_judge_carries_profile_and_fit_into_query():
+    captured = {}
+
+    async def fake_query(client, state, questions, model):
+        captured['state'] = state
+        captured['questions'] = questions
+        return _fit_result()
+
+    s = asyncio.run(signals.judge(
+        message='write an epic', attachments=[], query_fn=fake_query,
+        client=object(), model='jev-latest', agent_profile='developer',
+        pool_entries=_entries()))
+    assert captured['state']['agent_profile'] == 'developer'
+    assert 'preset_fit' in captured['questions']
+    assert 'profile_match' in captured['questions']
+    assert s.preset_fit == 'Story'
+    assert s.profile_match == 0.9
+
+
+def test_judge_without_profile_or_pool_asks_core_only():
+    captured = {}
+
+    async def fake_query(client, state, questions, model):
+        captured['questions'] = questions
+        return _ok_result()
+
+    asyncio.run(signals.judge(
+        message='hi', attachments=[], query_fn=fake_query,
+        client=object(), model='jev-latest'))
+    assert 'profile_match' not in captured['questions']
+    assert 'preset_fit' not in captured['questions']
+
+
+def test_judge_drops_invalid_fit_choice():
+    async def fake_query(client, state, questions, model):
+        return _fit_result(fit='Ghost')
+
+    s = asyncio.run(signals.judge(
+        message='x', attachments=[], query_fn=fake_query,
+        client=object(), model='jev-latest', pool_entries=_entries()))
+    assert s.preset_fit is None
+    assert s.preset_fit_confidence == 0.0
