@@ -105,6 +105,115 @@ def test_judge_passes_pool_snapshot_to_query():
     assert captured['state']['available_models'][0]['preset'] == 'Default'
 
 
+def _with_dbg_capture():
+     """Patch signals._dbg to capture lines; returns (logged, restore)."""
+     logged = []
+     orig = getattr(signals, '_dbg', None)
+     signals._dbg = lambda msg: logged.append(msg)
+
+     def restore():
+         if orig is not None:
+             signals._dbg = orig
+         elif hasattr(signals, '_dbg'):
+             del signals._dbg
+
+     return logged, restore
+
+
+def test_timeout_failure_is_logged_with_detail():
+     logged, restore = _with_dbg_capture()
+     try:
+         async def slow(client, state, questions, model):
+             await asyncio.sleep(10)
+             return _ok_result()
+         sig = asyncio.run(signals.judge(
+             message='anything', attachments=[], query_fn=slow,
+             client=object(), model='jev-latest', timeout_s=0.05))
+         assert sig is None
+         assert logged, 'timeout failure was not logged'
+         line = logged[0]
+         assert 'TimeoutError' in line, line
+         assert 'timeout_s=0.05' in line, line
+         assert 'elapsed_ms=' in line, line
+     finally:
+         restore()
+
+
+def test_query_exception_failure_is_logged_with_detail():
+     logged, restore = _with_dbg_capture()
+     try:
+         async def boom(client, state, questions, model):
+             raise RuntimeError('jev down')
+         sig = asyncio.run(signals.judge(
+             message='anything', attachments=[], query_fn=boom,
+             client=object(), model='jev-latest'))
+         assert sig is None
+         assert logged, 'exception failure was not logged'
+         line = logged[0]
+         assert 'RuntimeError' in line, line
+         assert 'jev down' in line, line
+         assert 'elapsed_ms=' in line, line
+     finally:
+         restore()
+
+
+def test_timeout_retry_recovers_on_second_attempt():
+    logged, restore = _with_dbg_capture()
+    calls = []
+    try:
+        async def flaky(client, state, questions, model):
+            calls.append(1)
+            if len(calls) == 1:
+                await asyncio.sleep(10)
+            return _ok_result()
+        sig = asyncio.run(signals.judge(
+            message='refactor module and add tests', attachments=[],
+            query_fn=flaky, client=object(), model='jev-latest',
+            timeout_s=0.05))
+        assert sig is not None, 'retry did not recover the judgment'
+        assert sig.task_class == 'coding', sig
+        assert len(calls) == 2, f'expected 2 attempts, got {len(calls)}'
+        assert any('retry' in m.lower() for m in logged), logged
+    finally:
+        restore()
+
+
+def test_timeout_retry_exhausted_returns_none():
+    logged, restore = _with_dbg_capture()
+    calls = []
+    try:
+        async def always_slow(client, state, questions, model):
+            calls.append(1)
+            await asyncio.sleep(10)
+            return _ok_result()
+        sig = asyncio.run(signals.judge(
+            message='anything', attachments=[], query_fn=always_slow,
+            client=object(), model='jev-latest', timeout_s=0.05))
+        assert sig is None
+        assert len(calls) == 2, f'expected 2 attempts, got {len(calls)}'
+        assert any('attempts=2' in m for m in logged), logged
+        assert any('TimeoutError' in m for m in logged), logged
+    finally:
+        restore()
+
+
+def test_non_timeout_error_is_not_retried():
+    logged, restore = _with_dbg_capture()
+    calls = []
+    try:
+        async def boom(client, state, questions, model):
+            calls.append(1)
+            raise RuntimeError('jev down')
+        sig = asyncio.run(signals.judge(
+            message='anything', attachments=[], query_fn=boom,
+            client=object(), model='jev-latest', timeout_s=0.05))
+        assert sig is None
+        assert len(calls) == 1, f'non-timeout error was retried ({len(calls)})'
+        assert any('RuntimeError' in m and 'attempts=1' in m for m in logged), logged
+    finally:
+        restore()
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     failed = 0

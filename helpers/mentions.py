@@ -16,6 +16,26 @@ EXCLUDE_VERBS = "stop using|do not use|don't use|no more|without|drop|exclude"
 PREFER_VERBS = "use|switch to|prefer|route to"
 
 
+def _strip_quoted(text: str) -> str:
+    """Remove quoted / non-authored content that must not fire dials.
+
+    Targets text that quotes files or tool output rather than the user's own
+    command: fenced code blocks, full-line comments, blockquote lines, and
+    inline backtick spans. Never raises; returns the input on any error.
+    """
+    try:
+        out = text
+        # fenced code blocks first, so later rules cannot break them up
+        out = re.sub(r'(?ms)^[ \t]*(?:```|~~~).*?^[ \t]*(?:```|~~~)[ \t]*$',
+                     ' ', out)
+        out = re.sub(r'(?m)^[ \t]*#.*$', ' ', out)      # comment lines
+        out = re.sub(r'(?m)^[ \t]*>.*$', ' ', out)      # blockquote lines
+        out = re.sub(r'`[^`\n]*`', ' ', out)            # inline code spans
+        return out
+    except Exception:
+        return text
+
+
 def _alias_map(providers) -> dict:
     m = {}
     for prov in providers or []:
@@ -45,7 +65,9 @@ def parse(text: str, providers) -> Mentions:
     try:
         if not isinstance(text, str) or not text.strip():
             return m
-        low = text.lower()
+        # Dials fire only on the user's own words: quoted file/comment/
+        # tool content is stripped before any matching (false-positive fix).
+        low = _strip_quoted(text).lower()
         aliases = _alias_map(providers)
         m.exclude = _find(low, EXCLUDE_VERBS, aliases)
         m.prefer = [p for p in _find(low, PREFER_VERBS, aliases)

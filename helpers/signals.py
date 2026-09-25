@@ -1,6 +1,21 @@
-# jev_router signals: one Jev batch judging the incoming message.
 import asyncio
+import time
 from dataclasses import dataclass
+from pathlib import Path
+
+
+DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
+
+
+def _dbg(msg: str) -> None:
+    """Best-effort debug-log write; never raises."""
+    try:
+        from datetime import datetime as _dt
+        stamp = _dt.now().strftime('%H:%M:%S.%f')[:-3]
+        with open(DEBUG_LOG, 'a') as f:
+            f.write(stamp + ' [signals] ' + msg + chr(10))
+    except Exception:
+        pass
 
 
 @dataclass
@@ -111,18 +126,42 @@ async def judge(
     model: str,
     timeout_s: float = 2.0,
     pool_entries: list | None = None,
+    retries: int = 1,
 ) -> Signals | None:
-    """Run the routing batch. Returns Signals or None on any failure."""
-    try:
-        result = await asyncio.wait_for(
-            query_fn(
-                client,
-                build_state(message, attachments, pool_entries=pool_entries),
-                build_questions(),
-                model,
-            ),
-            timeout=timeout_s,
-        )
-    except Exception:
-        return None
-    return _parse(result)
+    """Run the routing batch. Returns Signals or None on any failure.
+
+    A hung Jev request never returns (observed in production), so a
+    TimeoutError gets exactly ``retries`` more attempts; all other
+    exceptions fail fast without retry.
+    """
+    start = time.monotonic()
+    total = max(int(retries), 0) + 1
+    for attempt in range(1, total + 1):
+        try:
+            result = await asyncio.wait_for(
+                query_fn(
+                    client,
+                    build_state(message, attachments, pool_entries=pool_entries),
+                    build_questions(),
+                    model,
+                ),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError as exc:
+            elapsed_ms = round((time.monotonic() - start) * 1000)
+            if attempt < total:
+                _dbg(f'judge retry {attempt}/{total - 1} after '
+                     f'{type(exc).__name__} elapsed_ms={elapsed_ms} '
+                     f'timeout_s={timeout_s}')
+                continue
+            _dbg(f'judge failed: {type(exc).__name__}: {exc} '
+                 f'elapsed_ms={elapsed_ms} timeout_s={timeout_s} '
+                 f'attempts={attempt}')
+            return None
+        except Exception as exc:
+            elapsed_ms = round((time.monotonic() - start) * 1000)
+            _dbg(f'judge failed: {type(exc).__name__}: {exc} '
+                 f'elapsed_ms={elapsed_ms} timeout_s={timeout_s} '
+                 f'attempts={attempt}')
+            return None
+        return _parse(result)

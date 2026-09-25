@@ -92,6 +92,60 @@ def test_prefer_with_the_article():
     assert m.prefer == ['a0_venice'], m
 
 
+# --- quoted / non-authored content must not fire dials (regression) ---
+
+def test_quoted_policy_comment_lines_no_dial():
+    text = (
+        '# Chat mentions (per message, highest precedence below the WebUI):\n'
+        '#   stop using zai | do not use venice | no more openrouter | drop lm_studio\n'
+        '#   use zai | switch to venice | use free models')
+    m = mentions.parse(text, PROVIDERS)
+    assert m.exclude == [] and m.prefer == [] and m.free is False, m
+
+
+def test_yaml_dump_lines_no_dial():
+    text = (
+        'exclude:\n'
+        '- lm_studio\n'
+        '- a0_venice')
+    m = mentions.parse(text, PROVIDERS)
+    assert m.exclude == [] and m.prefer == [], m
+
+
+def test_fenced_block_no_dial():
+    text = (
+        'What does the routing policy say?\n'
+        '~~~yaml\n'
+        'exclude:\n'
+        '- lm_studio\n'
+        '~~~\n'
+        'Thanks')
+    m = mentions.parse(text, PROVIDERS)
+    assert m.exclude == [] and m.prefer == [] and m.free is False, m
+
+
+def test_inline_backticks_no_dial():
+    m = mentions.parse('check the `stop using zai` line in the file', PROVIDERS)
+    assert m.exclude == [], m
+
+
+def test_blockquote_tool_marker_no_dial():
+    text = (
+        '> tool result:\n'
+        '> stop using zai | no more openrouter')
+    m = mentions.parse(text, PROVIDERS)
+    assert m.exclude == [], m
+
+
+def test_real_dial_survives_after_quoted_lines():
+    text = (
+        'Policy says `use free models` in comments, but I insist:\n'
+        'stop using zai for 2 hours')
+    m = mentions.parse(text, PROVIDERS)
+    assert m.exclude == ['zai_coding'], m
+    assert m.ttl_hours == 2
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     failed = 0
