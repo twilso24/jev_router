@@ -29,7 +29,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - **Delegation advice**: when `delegate_worthy >= threshold`, a SystemMessage advisory suggests `call_subordinate`.
 - **Eligibility**: static provider include/exclude in `routing-policy.yaml`.
 - **Schedules**: time-based provider exclude/prefer (first matching window wins, midnight wrap supported).
-- **Chat mentions**: per-message dials (`stop using zai`, `use venice`, `use free models`) with optional TTL (`tonight`, `today`, `for N hours`).
+- **Chat mentions**: per-message dials (`stop using zai`, `use venice`, `use free models`) with optional TTL (`tonight`, `today`, `for N hours`). Quoted content (fenced code blocks, comment lines, blockquotes, inline backtick spans) is stripped before parsing, so pasting policy examples or tool output cannot trigger dials.
 - **Circuit breaker**: auto-excludes providers on `breaker_threshold` build failures; recovers on success or cooldown expiry. Overrides all other rules for health.
 
 ### Dynamic Profile Switching (opt-in)
@@ -41,6 +41,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - **Real-call tracking**: Every routed model is instrumented at build time. Real API outcomes (ok/fail, duration, error) feed the circuit breaker and persist to the `calls` table.
 - **State-aware auto-tune**: Persisted `auto_tune` flag in `routing-policy.yaml`. When ON, the router ranks band orders from live call outcomes on every call (`[auto-tune]` tag in reasons). No manual Suggest needed.
 - **Band tuning**: Deterministic suggestion from telemetry (healthy first, failing last, current order breaks ties). Panel allows manual ▲▼ reorder and one-click Apply.
+- **Judgment observability and retry**: Jev failures log under `[signals]` with exception type, `elapsed_ms`, `timeout_s`, and `attempts=N`. A timed-out judgment is retried once (other errors fail fast) before falling back to the active preset.
 
 ### WebUI
 
@@ -57,7 +58,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 - `jev_api_key` (""): TypeSafe API key; blank falls back to the `TYPESAFE_API_KEY` secret/env var.
 - `jev_model` (jev-latest): pin a Jev version available to your account.
 - `jev_timeout` (30): per-TypeSafe HTTP attempt, seconds (1–300).
-- `jev_timeout_s` (5.0): total judgment budget per message before falling back to the active preset.
+- `jev_timeout_s` (5.0): judgment budget per attempt. A timed-out judgment is retried once before falling back to the active preset (worst case is about twice the budget).
 - `delegation_threshold` (0.6), `delegation_mode` (advise|auto).
 - `chat_preselect` (true): Jev suggests the agent profile for new chats.
 - `dynamic_switch_enabled` (false): opt-in mid-chat profile switching.
@@ -86,7 +87,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 ```bash
 cd /a0 && for t in /a0/usr/plugins/jev_router/tests/test_*.py; do /opt/venv-a0/bin/python "$t"; done
 ```
-**23 suites, 233 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring).
+**23 suites, 253 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring).
 
 ## Safety boundaries
 - The hook **never raises**: any error keeps the framework model.

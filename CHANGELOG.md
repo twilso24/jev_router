@@ -2,6 +2,16 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.4.1] - 2026-09-24
+
+### Fixed
+- **Chat mentions no longer fire on quoted text:** fenced code blocks, comment lines, blockquotes, and inline backtick spans are stripped before dial parsing. Pasting policy examples (such as the `routing-policy.yaml` help comment) or tool output can no longer exclude every provider and empty the pool.
+- **Judgment failures are observable:** `signals.judge` logs `[signals] judge failed: <ExceptionType>: <message> elapsed_ms=<ms> timeout_s=<s> attempts=<n>` instead of silently swallowing exceptions.
+
+### Changed
+- **Bounded retry for hung Jev judgments:** a `TimeoutError` gets exactly one retry; every other exception still fails fast. Motivated by production telemetry showing intermittent server-side hangs consuming the full budget; in live traffic the retry recovered real failures within 0.3-1.4 s.
+- README refreshed: mention quoting behavior, judgment retry and observability, per-attempt timeout semantics, corrected test counts (23 suites, 253 tests).
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
