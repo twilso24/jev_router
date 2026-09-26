@@ -23,12 +23,12 @@
     <div class="jev-card-head">
       <h2 class="jev-card-title">Band Tuning</h2>
       <div class="jev-toggles">
-        <label class="jev-toggle" title="Auto-rank bands from live telemetry (persisted)"><input type="checkbox" class="jev-autotune-toggle"> auto-tune</label>
-        <button type="button" class="jev-btn btn-secondary jev-btn-sm jev-tune-suggest">Suggest</button>
-        <button type="button" class="jev-btn btn-primary jev-btn-sm jev-tune-apply">Apply</button>
+        <span class="jev-chip jev-autotune-chip" title="Live telemetry ranks bands by default. Pin a band to freeze its order.">auto-tune</span>
+        <button type="button" class="jev-btn btn-primary jev-btn-sm jev-tune-apply">Apply edits</button>
       </div>
     </div>
     <div class="jev-tune-status" aria-live="polite"></div>
+    <div class="jev-tune-status jev-autofeed" aria-live="polite"></div>
     <div class="jev-wire" hidden aria-live="polite"></div>
     <div class="jev-tuning">Loading…</div>
   </section>
@@ -331,6 +331,15 @@
 }
 
 .jev-wire-chip.add { color: var(--accent-primary); }
+.jev-wire-summary,
+.jev-wire-dismiss {
+  cursor: pointer;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 0;
+  font: inherit;
+}
+.jev-wire-details[hidden] { display: none; }
 .jev-wire-chip.prune { color: var(--text-danger); }
 .jev-wire-chip.warn {
   border-color: var(--accent-primary);
@@ -406,6 +415,49 @@
   color: var(--text-secondary);
   min-height: 1rem;
   margin-bottom: 0.25rem;
+}
+
+.jev-autotune-chip {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.jev-autotune-chip.pinned {
+  background: var(--bg-success);
+  color: var(--text-success);
+}
+
+.jev-pin-btn {
+  cursor: pointer;
+  user-select: none;
+}
+
+.jev-pin-btn:hover,
+.jev-pin-btn.pinned {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+.jev-pin-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.jev-frozen {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+.jev-deleg-chip {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.jev-deleg-chip.directed {
+  background: var(--accent-primary);
+  color: var(--text-on-primary);
 }
 
 .jev-band { margin-bottom: 0.5rem; }
@@ -548,11 +600,24 @@ function decisionRow(d) {
   model.title = name;
   top.appendChild(model);
   top.appendChild(el('span', 'jev-chip ' + bandClass(d.band), String(d.band || 'n/a')));
+  if (d.rule) top.appendChild(el('span', 'jev-chip jev-rule-chip', String(d.rule)));
   top.appendChild(el('span', 'jev-ts', fmtTs(d.ts)));
   row.appendChild(top);
-  if (d.reason) row.appendChild(el('div', 'jev-decision-reason', d.reason));
+  const human = d.reason_human || d.reason;
+  if (human) {
+    const line = el('div', 'jev-decision-reason', human);
+    if (d.reason && d.reason_human) line.title = d.reason;
+    row.appendChild(line);
+  }
   if (d.profile_match) top.appendChild(el('span', 'jev-chip', 'profile:' + d.profile_match));
-  if (d.preset_fit) top.appendChild(el('span', 'jev-chip' + (d.fit_used ? '' : ' jev-fit-skip'), d.fit_used ? 'fit' : 'fit-skipped'));
+  if (d.preset_fit) {
+    if (d.rule) {
+      if (!d.fit_used) top.appendChild(el('span', 'jev-chip jev-fit-skip', 'fit-skipped'));
+    } else {
+      top.appendChild(el('span', 'jev-chip' + (d.fit_used ? '' : ' jev-fit-skip'), d.fit_used ? 'fit' : 'fit-skipped'));
+    }
+  }
+  if (d.delegation) top.appendChild(el('span', 'jev-chip jev-deleg-chip' + (d.delegation === 'directed' ? ' directed' : ''), String(d.delegation) + (d.auto_exec ? '·auto' : '')));
   return row;
 }
 
@@ -649,6 +714,7 @@ function initPanel(root) {
   let exclSet = new Set();
   let exclBusy = false;
   let autoTune = false;
+  let pinnedSet = new Set();
   let lastTuneSig = '';
   const BANDS_KEY = 'jev_panel_bands';
   let bandOpen = { light: true, medium: false, heavy: false };
@@ -667,6 +733,22 @@ function initPanel(root) {
       head.appendChild(el('span', 'jev-band-chevron', '▶'));
       head.appendChild(el('span', 'jev-band-name', band));
       head.appendChild(el('span', 'jev-band-nums', String((tuneOrders[band] || []).length)));
+      const isPinned = pinnedSet.has(band);
+      const pinBtn = el('span', 'jev-band-nums jev-pin-btn' + (isPinned ? ' pinned' : ''), isPinned ? 'pinned' : 'pin');
+      pinBtn.setAttribute('role', 'button');
+      pinBtn.tabIndex = 0;
+      pinBtn.title = isPinned ? 'Unpin: return ' + band + ' to auto-ranking' : 'Pin: freeze this band order (manual wins)';
+      pinBtn.onclick = async (ev) => {
+        ev.stopPropagation();
+        try {
+          const r = await callJsonApi('plugins/jev_router/routing_policy', { action: 'set_pin', band: band, pinned: !isPinned });
+          if (r && r.ok) { lastTuneSig = ''; await loadTuning(); }
+        } catch (e) {}
+      };
+      pinBtn.onkeydown = (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pinBtn.onclick(ev); }
+      };
+      head.appendChild(pinBtn);
       head.onclick = () => {
         bandOpen[band] = !bandOpen[band];
         saveBands();
@@ -684,16 +766,20 @@ function initPanel(root) {
         row.appendChild(name);
         const st = tuneStats[preset];
         if (st) row.appendChild(el('span', 'jev-band-nums', st.ok + 'ok ' + st.fail + 'fail'));
-        const up = el('button', 'jev-btn btn-secondary jev-btn-sm', '▲');
-        up.type = 'button';
-        up.setAttribute('aria-label', 'move ' + preset + ' up in ' + band);
-        up.onclick = () => moveTune(band, i, -1);
-        const dn = el('button', 'jev-btn btn-secondary jev-btn-sm', '▼');
-        dn.type = 'button';
-        dn.setAttribute('aria-label', 'move ' + preset + ' down in ' + band);
-        dn.onclick = () => moveTune(band, i, 1);
-        row.appendChild(up);
-        row.appendChild(dn);
+        if (pinnedSet.has(band)) {
+          row.appendChild(el('span', 'jev-band-nums jev-frozen', 'frozen'));
+        } else {
+          const up = el('button', 'jev-btn btn-secondary jev-btn-sm', '▲');
+          up.type = 'button';
+          up.setAttribute('aria-label', 'move ' + preset + ' up in ' + band);
+          up.onclick = () => moveTune(band, i, -1);
+          const dn = el('button', 'jev-btn btn-secondary jev-btn-sm', '▼');
+          dn.type = 'button';
+          dn.setAttribute('aria-label', 'move ' + preset + ' down in ' + band);
+          dn.onclick = () => moveTune(band, i, 1);
+          row.appendChild(up);
+          row.appendChild(dn);
+        }
         body.appendChild(row);
       });
       bodyWrap.appendChild(body);
@@ -753,24 +839,93 @@ function initPanel(root) {
     });
   };
 
+  const WIRE_DISMISS_KEY = 'jev_wire_dismissed_ts';
+  let wireExpanded = false;
+  const wireAge = (ts) => {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - (Number(ts) || 0)));
+    if (s < 90) return 'just now';
+    if (s < 5400) return Math.round(s / 60) + 'm ago';
+    if (s < 129600) return Math.round(s / 3600) + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+  };
   const renderWire = (wire, unwired) => {
     const box = q('.jev-wire');
     if (!box) return;
-    const parts = [];
-    if (wire && Array.isArray(wire.added))
-      for (const n of wire.added) parts.push(['+ ' + n, 'add']);
-    if (wire && Array.isArray(wire.pruned))
-      for (const n of wire.pruned) parts.push(['− ' + n, 'prune']);
-    if (Array.isArray(unwired) && unwired.length)
-      parts.push(['unwired: ' + unwired.join(', '), 'warn']);
     box.textContent = '';
-    if (!parts.length) { box.hidden = true; return; }
+    const unwiredList = Array.isArray(unwired) && unwired.length ? unwired : [];
+    const added = wire && Array.isArray(wire.added) ? wire.added : [];
+    const pruned = wire && Array.isArray(wire.pruned) ? wire.pruned : [];
+    const ts = wire ? (Number(wire.ts) || 0) : 0;
+    let dismissedRaw = '';
+    try { dismissedRaw = localStorage.getItem(WIRE_DISMISS_KEY) || ''; } catch (e) {}
+    const tooOld = ts && (Date.now() / 1000 - ts) > 86400;
+    const reportActive = (added.length || pruned.length)
+      && !tooOld && dismissedRaw !== String(ts || 'none');
+    if (!reportActive && !unwiredList.length) { box.hidden = true; return; }
     box.hidden = false;
-    for (const [label, cls] of parts) {
-      const chip = el('span', 'jev-wire-chip ' + cls, label);
-      chip.title = label;
-      box.appendChild(chip);
+    if (reportActive) {
+      const summary = el('button', 'jev-wire-chip jev-wire-summary',
+        'auto-wired: +' + added.length + ' −' + pruned.length
+        + (ts ? ' · ' + wireAge(ts) : ''));
+      summary.type = 'button';
+      summary.title = 'Show auto-wire details';
+      const details = el('span', 'jev-wire-details');
+      details.hidden = !wireExpanded;
+      const fill = () => {
+        details.textContent = '';
+        for (const n of added) {
+          const chip = el('span', 'jev-wire-chip add', '+ ' + n);
+          chip.title = n;
+          details.appendChild(chip);
+        }
+        for (const n of pruned) {
+          const chip = el('span', 'jev-wire-chip prune', '− ' + n);
+          chip.title = n;
+          details.appendChild(chip);
+        }
+      };
+      if (wireExpanded) fill();
+      summary.onclick = () => {
+        wireExpanded = !wireExpanded;
+        if (wireExpanded && !details.childNodes.length) fill();
+        details.hidden = !wireExpanded;
+      };
+      const dismiss = el('button', 'jev-wire-chip jev-wire-dismiss', '×');
+      dismiss.type = 'button';
+      dismiss.title = 'Hide this auto-wire report';
+      dismiss.onclick = () => {
+        try { localStorage.setItem(WIRE_DISMISS_KEY, String(ts || 'none')); } catch (e) {}
+        wireExpanded = false;
+        box.hidden = true;
+      };
+      box.appendChild(summary);
+      box.appendChild(dismiss);
+      box.appendChild(details);
     }
+    if (unwiredList.length)
+      box.appendChild(el('span', 'jev-wire-chip warn',
+        'unwired: ' + unwiredList.join(', ')));
+  };
+
+  const renderAutoFeed = (cur, ranked) => {
+    const feed = q('.jev-autofeed');
+    if (!feed) return;
+    feed.textContent = '';
+    const lines = [];
+    for (const band of ['light', 'medium', 'heavy']) {
+      const c = cur[band] || [];
+      const r = ranked[band] || [];
+      if (c.join('|') === r.join('|')) continue;
+      const promoted = r.find((n, idx) => c.indexOf(n) > idx);
+      const st = promoted ? tuneStats[promoted] : null;
+      const ev = st ? (' (' + st.ok + 'ok/' + st.fail + 'fail)') : '';
+      lines.push(band + ': auto-ranked' + (promoted ? ' - ' + promoted + ' promoted' + ev : ''));
+    }
+    if (!lines.length) {
+      feed.appendChild(el('div', 'jev-decision-reason', 'no auto-tune changes vs saved orders'));
+      return;
+    }
+    lines.forEach((t2) => feed.appendChild(el('div', 'jev-decision-reason', t2)));
   };
 
   const loadTuning = async () => {
@@ -779,10 +934,15 @@ function initPanel(root) {
       const t = await callJsonApi('plugins/jev_router/routing_policy', { action: 'tuning' });
       if (!t.ok) { st.textContent = 'tuning error'; return; }
       autoTune = t.auto_tune === true;
-      const at = q('.jev-autotune-toggle');
-      if (at) at.checked = autoTune;
+      const atChip = q('.jev-autotune-chip');
+      if (atChip) {
+        atChip.textContent = autoTune ? 'auto-tune on' : 'auto-tune off';
+        atChip.classList.toggle('pinned', autoTune);
+      }
+      pinnedSet = new Set(Object.entries(t.pinned_bands || {})
+        .filter(([, v]) => v).map(([b]) => b));
       const orders = autoTune ? (t.suggested || t.current) : t.current;
-      const sig = JSON.stringify([orders, t.stats || {}, t.provider_states || [], t.wire_state || null, t.unwired || []]);
+      const sig = JSON.stringify([orders, t.stats || {}, t.provider_states || [], t.wire_state || null, t.unwired || [], t.pinned_bands || {}]);
       if (sig === lastTuneSig) return;
       lastTuneSig = sig;
       tuneOrders = JSON.parse(JSON.stringify(orders));
@@ -792,47 +952,38 @@ function initPanel(root) {
       if (!exclBusy) renderExcludes();
       renderWire(t.wire_state, t.unwired);
       renderTuning();
-      st.textContent = autoTune ? 'auto-tune on - ranked from live telemetry' : '';
+      st.textContent = autoTune ? 'ranked from live telemetry' : 'auto-tune off';
       if (autoTune) setTimeout(() => { const s2 = q('.jev-tune-status'); if (s2) s2.textContent = ''; }, 3000);
+      renderAutoFeed(t.current || {}, orders);
     } catch (e) { st.textContent = 'tuning load error'; }
   };  
-
-  q('.jev-tune-suggest').onclick = async () => {
-    const st = q('.jev-tune-status');
-    try {
-      const t = await callJsonApi('plugins/jev_router/routing_policy', { action: 'tuning' });
-      if (!t.ok) { st.textContent = 'suggest error'; return; }
-      tuneOrders = JSON.parse(JSON.stringify(t.suggested));
-      tuneStats = t.stats || {};
-      renderTuning();
-      st.textContent = 'suggested - review, then Apply';
-    } catch (e) { st.textContent = 'suggest error'; }
-  };
 
   q('.jev-tune-apply').onclick = async () => {
     const st = q('.jev-tune-status');
     if (!tuneOrders) { st.textContent = 'nothing to apply'; return; }
     try {
       const r = await callJsonApi('plugins/jev_router/routing_policy', { action: 'write_band_orders', band_orders: tuneOrders });
-      st.textContent = r.ok ? 'applied - live on next message' : ('error: ' + (r.error || '?'));
+      st.textContent = r.ok ? 'applied - pin a band to keep a manual order' : ('error: ' + (r.error || '?'));
       if (r.ok) setTimeout(() => { st.textContent = ''; }, 3000);
     } catch (e) { st.textContent = 'apply error'; }
   };
 
-  const atInit = q('.jev-autotune-toggle');
-  if (atInit) atInit.onchange = async () => {
-    const st = q('.jev-tune-status');
-    try {
-      const r = await callJsonApi('plugins/jev_router/routing_policy', { action: 'set_auto_tune', enabled: atInit.checked });
-      if (!r.ok) { st.textContent = 'error: ' + (r.error || '?'); atInit.checked = !atInit.checked; return; }
-      autoTune = atInit.checked;
-      st.textContent = autoTune ? 'auto-tune on' : 'auto-tune off';
-      lastTuneSig = '';
-      await loadTuning();
-      setTimeout(() => { const s2 = q('.jev-tune-status'); if (s2) s2.textContent = ''; }, 2500);
-    } catch (e) { st.textContent = 'toggle error'; atInit.checked = !atInit.checked; }
-  };
-
+  const atChip = q('.jev-autotune-chip');
+  if (atChip) {
+    atChip.setAttribute('role', 'button');
+    atChip.tabIndex = 0;
+    atChip.title = 'Toggle auto-tune (live telemetry band ranking)';
+    const toggleAuto = async () => {
+      try {
+        const r = await callJsonApi('plugins/jev_router/routing_policy', { action: 'set_auto_tune', enabled: !autoTune });
+        if (r && r.ok) { lastTuneSig = ''; await loadTuning(); }
+      } catch (e) {}
+    };
+    atChip.onclick = toggleAuto;
+    atChip.onkeydown = (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleAuto(); }
+    };
+  }
   loadTuning();
 
   root.__jevInit = { refresh };

@@ -11,6 +11,6 @@ class RoutingStats(ApiHandler):
             db = Path('/a0/tmp/jev_router_telemetry.db')
             limit = input.get('limit') if isinstance(input.get('limit'), int) else 20
             return {'ok': True, **webui_data.stats_from_db(db, limit=limit)}
-        except Exception as exc:
-            return {'ok': False, 'error': str(exc),
+        except Exception:
+            return {'ok': False, 'error': 'internal error',
                     'recent': [], 'totals': {'decisions': 0}, 'by_preset': {}}

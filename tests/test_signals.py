@@ -353,3 +353,18 @@ def test_judge_drops_invalid_fit_choice():
         client=object(), model='jev-latest', pool_entries=_entries()))
     assert s.preset_fit is None
     assert s.preset_fit_confidence == 0.0
+
+
+# --- Audit round 2: task_class must be one of the offered options ---
+
+
+def test_parse_out_of_options_task_class_falls_back_to_chat():
+    res = {'answers': {
+        'task_class': {'type': 'choice', 'choice': 'drop table users',
+                       'confidence': 0.9},
+        'complexity': {'score': 1.2},
+        'vision_needed': {'noul': 0.1},
+        'delegate_worthy': {'noul': 0.5}}}
+    sig = signals._parse(res)
+    assert sig is not None, 'a bogus class must not kill the judgment'
+    assert sig.task_class == 'chat'

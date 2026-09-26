@@ -8,6 +8,12 @@ from . import circuit_breaker as breaker_mod
 
 
 def stats_from_db(db_path: Path, limit: int = 20) -> dict:
+    # Clamp client-supplied limits (review finding): SQLite LIMIT -1 means
+    # unbounded; keep responses to a sane page size.
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 20
     try:
         if not db_path.exists():
             raise FileNotFoundError(f'db not found: {db_path}')
@@ -28,6 +34,11 @@ def stats_from_db(db_path: Path, limit: int = 20) -> dict:
         'profile_match': (r['profile_match']
                           if 'profile_match' in r.keys() else None),
         'fit_used': bool(r['fit_used']) if 'fit_used' in r.keys() else False,
+        'rule': r['rule'] if 'rule' in r.keys() else None,
+        'reason_human': (r['reason_human']
+                         if 'reason_human' in r.keys() else None),
+        'delegation': (r['delegation'] if 'delegation' in r.keys() else None),
+        'auto_exec': (bool(r['auto_exec']) if 'auto_exec' in r.keys() else False),
     } for r in rows]
 
     by_preset: dict = {}
@@ -75,9 +86,9 @@ def write_provider_rules(path: Path, exclude: list | None = None) -> bool:
                 if sx and sx not in dedup:
                     dedup.append(sx)
             data['provider_rules']['exclude'] = dedup
-        with open(path, 'w') as f:
-            yaml.safe_dump(data, f)
-        return True
+        from helpers.tuning import _POLICY_LOCK, _atomic_yaml_write
+        with _POLICY_LOCK:
+            return _atomic_yaml_write(Path(path), data)
     except Exception:
         return False
 
@@ -137,6 +148,7 @@ def tuning_report(db_path: Path, policy_path: Path,
     return {'current': current, 'suggested': suggested, 'stats': stats,
             'auto_tune': auto_tune, 'excludes': excludes,
             'provider_states': provider_states,
+            'pinned_bands': tuning_mod.read_pinned_bands(policy_path),
             'unwired': unwired, 'wire_state': wire_state}
 
 def pool_preset_names(presets_path: Path) -> list:

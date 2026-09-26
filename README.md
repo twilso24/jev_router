@@ -45,11 +45,11 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 
 ### Telemetry & Auto-Tune (P2/P3)
 - **Real-call tracking**: Every routed model is instrumented at build time. Real API outcomes (ok/fail, duration, error) feed the circuit breaker and persist to the `calls` table.
-- **State-aware auto-tune**: Persisted `auto_tune` flag in `routing-policy.yaml`. When ON, the router ranks band orders from live call outcomes on every call (`[auto-tune]` tag in reasons). No manual Suggest needed.
-- **Band tuning**: Deterministic suggestion from telemetry (healthy first, failing last, current order breaks ties). Panel allows manual ▲▼ reorder and one-click Apply.
-- **Judgment observability and retry**: Jev failures log under `[signals]` with exception type, `elapsed_ms`, `timeout_s`, and `attempts=N`. A timed-out judgment is retried once (other errors fail fast) before falling back to the active preset.
-
-### Auto-Wire Presets
+- **State-aware auto-tune**: Persisted `auto_tune` flag in `routing-policy.yaml`, defaulting ON when the key is absent (explicit values win; missing files fail safe to off). When ON, the router ranks band orders from live call outcomes on every call (`[auto-tune]` tag in reasons).
+- **Per-preset evidence floors**: a preset needs at least 10 own ok+fail observations before auto-tune will rank it; qualified presets rank healthy-first/failing-last, unproven presets keep their configured relative order behind them. One healthy call can never jump a preset to #1.
+- **Band pins**: pin any band in the panel to freeze its order against auto-tune, the performance dial, and auto-wire (manual wins). The panel shows a change feed of what auto-tune promoted and why.
+- **Performance dial**: `cost saver` / `balanced` / `max quality` re-ranks band emphasis on every call; explicit emphasis outranks auto-tune, pinned bands keep file order. Preset names without an exact tier entry classify by weighted keywords (power/max/expensive/unhinged vs fast/cheap/free/local/efficiency), so verbose pool names like *High Power and Free* tier correctly.
+- **Delegation 2.0**: gate recommendations inject a structured `JEVDIALOG` data block (profile, task class, confidence, reason). `advise` mode suggests, `auto` mode directs; opt-in auto-execution (off by default) upgrades confident delegations to first-action directives, once per message. Decision rows show `advised` / `directed` chips.
 
 Presets added to the chat pool become routable without hand-editing policy.
 
@@ -103,7 +103,7 @@ Presets added to the chat pool become routable without hand-editing policy.
 ```bash
 cd /a0/usr/projects/jev_router && /opt/venv-a0/bin/python -m pytest tests/ -q
 ```
-**26 suites, 303 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring), auto-wiring (band-order sync, pruning, wire state, route-trigger wiring, and the policy API action), per-file import isolation in the combined pytest run, and fit-aware routing (Jev fit/profile questions, constrained fit-honoring resolve, telemetry fit columns and migration, router config passthrough, extension profile wiring, and panel data exposure).
+**30 suites, 373 tests** covering pool, eligibility, fastpath, policy, router, signals, schedules, mentions, circuit breaker, call tracker, telemetry, tuning, webui data, bundled Jev helper, settings-UI wiring, extension behavior (no-key guard, failure-cache discipline), new-chat profile pre-selection (gate, decision logic, and hooks for both API and WebUI chat creation), and dynamic profile switching (policy state, streak/cooldown logic, and extension wiring), auto-wiring (band-order sync, pruning, wire state, route-trigger wiring, and the policy API action), per-file import isolation in the combined pytest run, and fit-aware routing (Jev fit/profile questions, constrained fit-honoring resolve, telemetry fit columns and migration, router config passthrough, extension profile wiring, and panel data exposure), plus the performance dial (tier ranks, fuzzy keyword tiers, pin protection), structured delegation advisory and auto-execution (session-scoped digest claims), and post-ship security hardening (atomic policy writes, generic API errors, task-class whitelist).
 
 ## Safety boundaries
 - The hook **never raises**: any error keeps the framework model.

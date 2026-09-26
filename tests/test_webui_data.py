@@ -196,3 +196,104 @@ def test_stats_recent_fit_fields_absent_when_no_signals():
         assert row['preset_fit'] is None
         assert row['profile_match'] is None
         assert row['fit_used'] is False
+
+
+# --- S2 (TDD) RED: decision card fields rule + reason_human ---
+
+def test_record_decision_stores_rule_and_human_reason():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = tel_mod.init_db(db)
+        d = Decision(_entry('Power'), 'heavy', 'row x',
+                     rule='fit',
+                     reason_human='Best match: Power')
+        tel_mod.record_decision(conn, d, Signals('coding', 0.9, 1.8, 0.05, 0.5), 'dx')
+        rows = tel_mod.last_decisions(conn, limit=1)
+        conn.close()
+        assert rows[0]['rule'] == 'fit'
+        assert rows[0]['reason_human'] == 'Best match: Power'
+
+
+def test_stats_recent_includes_rule_and_human_reason():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = tel_mod.init_db(db)
+        d = Decision(_entry('Power'), 'heavy', 'row x',
+                     rule='band',
+                     reason_human='Routed to Power: heavy coding task')
+        tel_mod.record_decision(conn, d, Signals('coding', 0.9, 1.8, 0.05, 0.5), 'dx')
+        conn.close()
+        s = webui_data.stats_from_db(db, limit=5)
+        row = s['recent'][0]
+        assert row['rule'] == 'band'
+        assert row['reason_human'] == 'Routed to Power: heavy coding task'
+
+
+# --- S4 (TDD) RED: tuning_report exposes pinned_bands ---
+def test_tuning_report_includes_pinned_bands():
+    with tempfile.TemporaryDirectory() as td:
+        pol = Path(td) / 'policy.yaml'
+        pol.write_text(yaml.safe_dump({'pinned_bands': {'light': True}}))
+        rep = webui_data.tuning_report(
+            Path(td) / 't.db', pol, ['Fast'])
+        assert rep['pinned_bands'] == {'light': True}
+
+def test_stats_recent_includes_delegation():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = tel_mod.init_db(db)
+        d = Decision(_entry('Power'), 'heavy', 'row x')
+        tel_mod.record_decision(conn, d, Signals('coding', 0.9, 1.8, 0.05, 0.9),
+                                'dx', delegation='advised')
+        conn.close()
+        s = webui_data.stats_from_db(db, limit=5)
+        assert s['recent'][0]['delegation'] == 'advised'
+
+def test_record_and_stats_expose_auto_exec():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = tel_mod.init_db(db)
+        d = Decision(_entry('Power'), 'heavy', 'row x')
+        tel_mod.record_decision(conn, d, Signals('coding', 0.9, 1.8, 0.05, 0.9),
+                                'dx', delegation='directed', auto_exec=True)
+        conn.close()
+        s = webui_data.stats_from_db(db, limit=5)
+        assert s['recent'][0]['auto_exec'] is True
+
+
+# --- FIX F7 (review fan-out): stats limit must be clamped ---
+
+def test_stats_from_db_clamps_negative_limit():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 't.db'
+        conn = tel_mod.init_db(db)
+        for i in range(3):
+            d = Decision(_entry('Power'), 'heavy', f'row {i}')
+            tel_mod.record_decision(conn, d,
+                                    Signals('coding', 0.9, 1.8, 0.05, 0.5),
+                                    f'd{i}')
+        conn.close()
+        s = webui_data.stats_from_db(db, limit=-1)
+        assert len(s['recent']) == 1
+
+
+# --- Audit round 2: write_provider_rules must be atomic ---
+
+
+def test_write_provider_rules_torn_dump_leaves_original(tmp_path, monkeypatch):
+    p = tmp_path / 'rp.yaml'
+    p.write_text('provider_rules:\n  exclude: [keep_me]\n')
+
+    def partial_dump(data, stream, **kw):
+        stream.write('provider_rul')
+        raise RuntimeError('dump crashed mid-write')
+
+    monkeypatch.setattr(webui_data.yaml, 'safe_dump', partial_dump)
+    ok = webui_data.write_provider_rules(p, exclude=['x'])
+    assert ok is False
+    import yaml as _yaml
+    loaded = _yaml.safe_load(p.read_text())
+    assert loaded['provider_rules']['exclude'] == ['keep_me'], \
+        'a torn dump must never corrupt the live policy'
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name != 'rp.yaml']
+    assert leftovers == [], leftovers

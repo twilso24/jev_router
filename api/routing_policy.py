@@ -38,6 +38,7 @@ class RoutingPolicy(ApiHandler):
                 return {'ok': True,
                         'report': {'added': rep.added,
                                    'pruned': rep.pruned,
+                                   'pinned': getattr(rep, 'pinned', []),
                                    'ts': rep.ts},
                         'unwired': auto_wire.unwired_presets(
                             POLICY_PATH, presets)}
@@ -46,6 +47,12 @@ class RoutingPolicy(ApiHandler):
                 ok = tuning.write_auto_tune(
                     POLICY_PATH, bool(input.get('enabled')))
                 return {'ok': ok, 'error': None if ok else 'write failed'}
+            if action == 'set_pin':
+                from usr.plugins.jev_router.helpers import tuning
+                ok = tuning.write_pin(
+                    POLICY_PATH, str(input.get('band') or ''),
+                    bool(input.get('pinned')))
+                return {'ok': ok, 'error': None if ok else 'invalid band'}
             if action == 'write_band_orders':
                 from usr.plugins.jev_router.helpers import tuning
                 raw = input.get('band_orders')
@@ -54,5 +61,5 @@ class RoutingPolicy(ApiHandler):
                 return {'ok': ok,
                         'error': None if ok else 'invalid band_orders'}
             return {'ok': False, 'error': 'unknown action'}
-        except Exception as exc:
-            return {'ok': False, 'error': str(exc)}
+        except Exception:
+            return {'ok': False, 'error': 'internal error'}

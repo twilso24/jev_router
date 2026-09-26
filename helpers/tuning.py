@@ -1,48 +1,55 @@
 # jev_router tuning: telemetry-driven band-order suggestions and safe,
 # partial policy writes so route tuning is a repeatable one-click step.
+import os
+import tempfile
+import threading
 from pathlib import Path
 
 import yaml
 
 from .policy import BANDS, DEFAULT_BAND_ORDERS, load_band_orders
 
+_POLICY_LOCK = threading.Lock()
+
+
+def _atomic_yaml_write(p: Path, data: dict) -> bool:
+    """Write YAML via unique tmp file + os.replace; clean up on failure."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), suffix='.yaml.tmp')
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        os.replace(tmp, p)
+        return True
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
 
 MIN_EVIDENCE_CALLS = 10
-
-
-def _observed_calls(stats: dict) -> int:
-    """Total ok+fail observations across presets; malformed entries count 0."""
-    total = 0
-    for s in (stats or {}).values():
-        if not isinstance(s, dict):
-            continue
-        for k in ('ok', 'fail'):
-            try:
-                total += int(s.get(k) or 0)
-            except Exception:
-                pass
-    return total
 
 
 def suggest_band_orders(current: dict, pool_presets: list,
                         preset_stats: dict) -> dict:
     """Suggest band orders from per-preset outcome stats.
 
-    Evidence floor: below MIN_EVIDENCE_CALLS total observed calls the
-    current (pool-filtered) orders are returned unchanged - one healthy
-    call must not promote a preset over the user's configured orders
-    (production: Default with ok=1 jumped to #1 in every band).
-
-    Once evidence is sufficient, ranking per band: healthy presets
-    (fail==0) first, most ok first; untouched presets keep their current
-    relative order; failing presets last, fewest failures first. Presets
+    Per-preset evidence floor: a preset needs at least
+    MIN_EVIDENCE_CALLS own ok+fail observations to be ranked at all.
+    Qualified presets rank healthy-first (most ok first), failing-last
+    (fewest failures first); unqualified presets - no or sparse own
+    evidence - keep their current relative order after the qualified
+    group, so one healthy call can never promote a preset over the
+    user's configured orders (production: Default with ok=1 jumped to
+    #1 in every band). Presets
     absent from the live pool are dropped; unknown pool presets are
     appended. Missing bands fall back to DEFAULT_BAND_ORDERS. Pure and
     total: never raises, covers all bands.
     """
     pool = [str(p) for p in (pool_presets or [])]
     stats = preset_stats if isinstance(preset_stats, dict) else {}
-    enough = _observed_calls(stats) >= MIN_EVIDENCE_CALLS
     cur_raw = current if isinstance(current, dict) else {}
     defaults = {b: list(names) for b, names in DEFAULT_BAND_ORDERS.items()}
     out = {}
@@ -54,6 +61,14 @@ def suggest_band_orders(current: dict, pool_presets: list,
         for p in pool:
             if p not in order:
                 order.append(p)
+
+        def qualified(p):
+            s = stats.get(p) if isinstance(stats.get(p), dict) else {}
+            try:
+                n = int(s.get('ok') or 0) + int(s.get('fail') or 0)
+            except Exception:
+                n = 0
+            return n >= MIN_EVIDENCE_CALLS
 
         def key(p):
             s = stats.get(p) if isinstance(stats.get(p), dict) else {}
@@ -69,11 +84,9 @@ def suggest_band_orders(current: dict, pool_presets: list,
                 return (1, fail, -ok, 0)
             return (0, -ok, 0, order.index(p))
 
-        if not enough:
-            out[band] = order
-            continue
-
-        out[band] = sorted(order, key=key)
+        qual = [p for p in order if qualified(p)]
+        unqual = [p for p in order if not qualified(p)]
+        out[band] = sorted(qual, key=key) + unqual
     return out
 
 
@@ -100,26 +113,29 @@ def write_band_orders(path, band_orders: dict) -> bool:
             updates[band] = names
         if not updates:
             return False
-        p = Path(path)
-        data = {}
-        if p.exists():
-            loaded = yaml.safe_load(p.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        existing = data.get('band_orders')
-        merged = dict(existing) if isinstance(existing, dict) else {}
-        merged.update(updates)
-        data['band_orders'] = merged
-        tmp = p.with_suffix('.yaml.tmp')
-        tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-        tmp.replace(p)
-        return True
+        with _POLICY_LOCK:
+            p = Path(path)
+            data = {}
+            if p.exists():
+                loaded = yaml.safe_load(p.read_text())
+                if isinstance(loaded, dict):
+                    data = loaded
+            existing = data.get('band_orders')
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(updates)
+            data['band_orders'] = merged
+            return _atomic_yaml_write(p, data)
     except Exception:
         return False
 
 
 def read_auto_tune(path) -> bool:
-    """True only when routing-policy.yaml holds auto_tune: true."""
+    """Auto-tune flag from routing-policy.yaml.
+
+    Explicit value wins (non-bool falls back to off). A keyless but
+    readable policy file defaults ON: auto-tune is the product default,
+    while missing or malformed files fail safe to off. Never raises.
+    """
     try:
         p = Path(path)
         if not p.exists():
@@ -127,7 +143,10 @@ def read_auto_tune(path) -> bool:
         data = yaml.safe_load(p.read_text())
         if not isinstance(data, dict):
             return False
-        return data.get('auto_tune') is True
+        if 'auto_tune' not in data:
+            return True
+        val = data['auto_tune']
+        return val if isinstance(val, bool) else False
     except Exception:
         return False
 
@@ -135,17 +154,59 @@ def read_auto_tune(path) -> bool:
 def write_auto_tune(path, enabled: bool) -> bool:
     """Persist auto_tune flag; preserves all other keys. Atomic."""
     try:
+        with _POLICY_LOCK:
+            p = Path(path)
+            data = {}
+            if p.exists():
+                loaded = yaml.safe_load(p.read_text())
+                if isinstance(loaded, dict):
+                    data = loaded
+            data['auto_tune'] = bool(enabled)
+            return _atomic_yaml_write(p, data)
+    except Exception:
+        return False
+
+
+def read_pinned_bands(path) -> dict:
+    """Pinned bands from routing-policy.yaml; {} on absence or failure.
+
+    A pinned band keeps its file order verbatim: auto-tune and auto-wire
+    must never reorder it (manual wins). Unknown bands are dropped.
+    """
+    try:
         p = Path(path)
-        data = {}
-        if p.exists():
-            loaded = yaml.safe_load(p.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        data['auto_tune'] = bool(enabled)
-        tmp = p.with_suffix('.yaml.tmp')
-        tmp.write_text(yaml.safe_dump(data, sort_keys=False))
-        tmp.replace(p)
-        return True
+        if not p.exists():
+            return {}
+        data = yaml.safe_load(p.read_text())
+        if not isinstance(data, dict):
+            return {}
+        raw = data.get('pinned_bands')
+        if not isinstance(raw, dict):
+            return {}
+        return {str(b): bool(v) for b, v in raw.items() if b in BANDS}
+    except Exception:
+        return {}
+
+
+def write_pin(path, band: str, pinned: bool) -> bool:
+    """Set pinned_bands[band]; rejects unknown bands; preserves all other
+    keys. Atomic tmp+replace. Returns True on success.
+    """
+    try:
+        if band not in BANDS:
+            return False
+        with _POLICY_LOCK:
+            p = Path(path)
+            data = {}
+            if p.exists():
+                loaded = yaml.safe_load(p.read_text())
+                if isinstance(loaded, dict):
+                    data = loaded
+            pins = data.get('pinned_bands')
+            pins = dict(pins) if isinstance(pins, dict) else {}
+            pins[str(band)] = bool(pinned)
+            data['pinned_bands'] = pins
+            return _atomic_yaml_write(p, data)
     except Exception:
         return False
 
@@ -155,7 +216,8 @@ def effective_band_orders(policy_path, telemetry_path=None,
     """Band orders routing should use right now.
 
     auto_tune off (or any failure): file orders, applied=False.
-    auto_tune on: outcome-ranked orders, applied=True. Never raises.
+    auto_tune on: outcome-ranked orders, applied=True; pinned bands keep
+    their file order verbatim. Never raises.
     """
     try:
         orders = load_band_orders(policy_path)
@@ -173,6 +235,10 @@ def effective_band_orders(policy_path, telemetry_path=None,
                     conn.close()
         suggested = suggest_band_orders(
             orders, list(pool_presets or []), stats)
+        pins = read_pinned_bands(policy_path)
+        for band, pin in pins.items():
+            if pin and band in suggested:
+                suggested[band] = orders.get(band) or suggested[band]
         return suggested, True
     except Exception:
         try:

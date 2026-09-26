@@ -2,6 +2,27 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.7.0] - 2026-09-25
+
+### Added
+- **Performance dial:** new *cost saver / balanced / max quality* setting re-ranks band emphasis per call (explicit emphasis wins over auto-tune; pinned bands keep file order). Unknown presets join the neutral middle rank; malformed configs are no-ops.
+- **Auto-tune by default:** a readable `routing-policy.yaml` without an `auto_tune` key defaults ON; explicit values always win; missing/malformed files fail safe to off. Panel shows a one-click auto-tune chip, a change feed of telemetry-ranked promotions, and per-band pins (pinned bands freeze against auto-tune, the dial, and auto-wire).
+- **Delegation 2.0:** structured advisory with a machine-readable `JEVDIALOG` data block (profile, task_class, confidence, reason) appended to the LLM context as a SystemMessage. `advise` keeps advisory wording, `auto` uses a directive. New opt-in **delegation auto-execution** (off by default, floor 0.8): high-confidence delegations become first-action directives, fired once per message. Panel decision rows show `advised` / `directed` (+ `·auto`) chips.
+- **Per-preset evidence floors:** auto-tune now ranks a preset only after it has at least 10 own ok+fail observations (was: a global 10-call gate let 1-call presets jump to #1). Qualified presets rank healthy-first/failing-last; unproven presets keep their relative order behind them.
+- **Simple/Advanced settings:** routing enable, API key, and the performance dial stay primary; the 11 expert knobs moved into a collapsed Advanced section.
+- **Dial-aware CLI report:** `report.py dial [config] [policy] [db]` prints the active dial, auto-tune state, pins, per-preset call outcomes, and effective orders (never raises).
+
+### Fixed
+- **Delegation advisory actually reaches the model:** the route extension created an injection slot but never assigned the router's advice to it, so advisories were dead code while telemetry still recorded chips.
+- A malformed `delegation_threshold` value now falls back to the default 0.6 instead of raising and silently disabling routing for every subsequent message.
+- Stats API clamps client-supplied `limit` (negative limits previously returned the full table unbounded).
+- Panel auto-wire report collapsed to a one-line summary (age-stamped, expandable, dismissible; reports older than 24h auto-hide) instead of rendering every added/pruned preset as a permanent chip wall.
+- **Fuzzy dial tiers:** preset names without an exact tier entry are classified by weighted keywords (power/max/expensive/unhinged vs fast/cheap/free/local/efficiency), so the performance dial works with verbose pool names like *Fast and Free* or *High Power and Free*; keyword ties stay neutral and exact-name maps keep precedence.
+
+### Security
+- The advisory payload is explicitly framed as reference-only data (not instructions) to keep the LLM-context injection channel data-only; profile strings still come exclusively from the task-class whitelist.
+- Review hardening: dead code removed, auto-exec claim guard gained a reset hook and FIFO-bound test, legacy telemetry DBs verified to gain all newer columns on migration.
+
 ## [0.6.0] - 2026-09-25
 
 ### Added

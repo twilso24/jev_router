@@ -476,12 +476,15 @@ def test_auto_tune_routes_away_from_failing_preset():
             }))
             db = Path(td) / 'tel.db'
             conn = telemetry.init_db(db)
-            # Power failing (below breaker threshold 3 -> not tripped).
-            # 10 observed calls total so auto-tune's evidence floor is met
-            # (below the floor it intentionally keeps current orders).
-            telemetry.record_call(conn, 'zai_coding', 'Power', False, 0.1, 'e1')
-            telemetry.record_call(conn, 'zai_coding', 'Power', False, 0.1, 'e2')
-            for _ in range(8):
+            # Per-preset evidence floors: Power qualified-failing (11 own
+            # calls, ok/fail interleaved so the breaker never sees 3
+            # consecutive fails) and Unhinged qualified-healthy (10 own
+            # ok calls); sparse own evidence would keep current orders.
+            for i in range(11):
+                ok_call = i % 2 == 1
+                telemetry.record_call(conn, 'zai_coding', 'Power', ok_call,
+                                      0.1, None if ok_call else 'e')
+            for _ in range(10):
                 telemetry.record_call(conn, 'a0_venice', 'Unhinged', True, 0.1, None)
             conn.close()
             res = await router.route(
@@ -582,3 +585,185 @@ def test_router_passes_fit_config_to_resolve():
             finally:
                 p_mod.resolve = old_resolve
     asyncio.run(run())
+
+
+def test_route_exposes_rule_and_human_reason():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            res = await router.route(
+                cfg=_cfg(), entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.5)),
+                client=object(), jev_model='jev-latest',
+                model_factory=lambda e: 'M', telemetry_path=Path(td) / 'tel.db')
+            assert res.rule == 'band', res.reason
+            assert res.reason_human
+            assert '[' not in res.reason_human and ']' not in res.reason_human
+    asyncio.run(run())
+
+
+def test_dial_quality_promotes_power_on_light_chat():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            pol = Path(td) / 'p.yaml'
+            pol.write_text('provider_rules:\n  include: []\n  exclude: []\n')
+            cfg = _cfg()
+            cfg['performance_dial'] = 'quality'
+            res = await router.route(
+                cfg=cfg, entries=_mk_entries(), policy_path=pol,
+                message='what is a bandwidth?', attachments=[],
+                query_fn=_fake_query(Signals('chat', 0.9, 0.2, 0.05, 0.5)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: f"MODEL[{e.preset_name}]",
+                telemetry_path=Path(td) / 't.db')
+            assert res.model == 'MODEL[Power]', res.reason
+    asyncio.run(run())
+
+
+def test_pinned_band_skips_dial():
+    import yaml
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            unpol = Path(td) / 'unpinned.yaml'
+            unpol.write_text(yaml.safe_dump({
+                'provider_rules': {'include': [], 'exclude': []},
+            }))
+            pinpol = Path(td) / 'pinned.yaml'
+            pinpol.write_text(yaml.safe_dump({
+                'provider_rules': {'include': [], 'exclude': []},
+                'pinned_bands': {'light': True},
+            }))
+            cfg = _cfg()
+            cfg['performance_dial'] = 'quality'
+
+            async def route_with(policy_path):
+                return await router.route(
+                    cfg=dict(cfg), entries=_mk_entries(), policy_path=policy_path,
+                    message='what is a bandwidth?', attachments=[],
+                    query_fn=_fake_query(Signals('chat', 0.9, 0.2, 0.05, 0.5)),
+                    client=object(), jev_model='j',
+                    model_factory=lambda e: f"MODEL[{e.preset_name}]",
+                    telemetry_path=Path(td) / 't.db')
+
+            un = await route_with(unpol)
+            pin = await route_with(pinpol)
+            # dial promotes Power in the unpinned light band;
+            # the pin freezes the file order, so Efficiency stays first
+            assert un.model == 'MODEL[Power]', un.reason
+            assert pin.model == 'MODEL[Efficiency]', pin.reason
+    asyncio.run(run())
+
+
+def test_route_advice_carries_structured_payload():
+    import json
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            res = await router.route(
+                cfg=_cfg(), entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.9)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: 'M', telemetry_path=Path(td) / 't.db')
+            assert res.advice and 'JEVDIALOG ' in res.advice, res.advice
+            payload = json.loads(res.advice.split('JEVDIALOG ', 1)[1])
+            assert payload['profile'] == 'developer'
+    asyncio.run(run())
+
+
+def test_route_records_delegation_advised():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 't.db'
+            await router.route(
+                cfg=_cfg(), entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.9)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: 'M', telemetry_path=db)
+            row = telemetry.last_decisions(telemetry.init_db(db))[0]
+            assert row['delegation'] == 'advised', dict(row)
+    asyncio.run(run())
+
+
+def test_route_records_delegation_directed_in_auto_mode():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 't.db'
+            cfg = _cfg()
+            cfg['delegation_mode'] = 'auto'
+            await router.route(
+                cfg=cfg, entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.9)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: 'M', telemetry_path=db)
+            row = telemetry.last_decisions(telemetry.init_db(db))[0]
+            assert row['delegation'] == 'directed', dict(row)
+    asyncio.run(run())
+
+
+def test_auto_exec_fires_once_per_message():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 't.db'
+            cfg = _cfg()
+            cfg.update({'delegation_mode': 'auto',
+                        'delegation_auto_execute': True})
+            kwargs = dict(
+                cfg=cfg, entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.9)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: 'M', telemetry_path=db)
+            r1 = await router.route(**kwargs)
+            r2 = await router.route(**kwargs)
+            assert 'first action' in r1.advice, r1.advice
+            assert 'first action' not in r2.advice, r2.advice
+            rows = telemetry.last_decisions(telemetry.init_db(db), limit=2)
+            autos = [row['auto_exec'] for row in rows]
+            assert sorted(autos) == [0, 1], [dict(r) for r in rows]
+    asyncio.run(run())
+
+
+def test_fastpath_never_auto_executes():
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 't.db'
+            cfg = _cfg()
+            cfg.update({'delegation_mode': 'auto',
+                        'delegation_auto_execute': True})
+            res = await router.route(
+                cfg=cfg, entries=_mk_entries(), policy_path=Path(td) / 'p.yaml',
+                message='ok thanks!', attachments=[],
+                query_fn=_fake_query(Signals('chat', 1.0, 0.0, 0.0, 0.0)),
+                client=object(), jev_model='j',
+                model_factory=lambda e: 'M', telemetry_path=db)
+            assert res.advice is None
+    asyncio.run(run())
+
+
+def test_auto_exec_claim_reset_and_eviction():
+    """FIX F4 (review): reset hook for test isolation; FIFO bound holds."""
+    router._AUTO_EXEC_SEEN.clear()
+    try:
+        assert router._auto_exec_claim('s1', 'd1') is True
+        assert router._auto_exec_claim('s1', 'd1') is False
+        router._auto_exec_reset()
+        assert router._auto_exec_claim('s1', 'd1') is True
+        for i in range(512):
+            router._auto_exec_claim('s1', f'fill-{i}')
+        assert len(router._AUTO_EXEC_SEEN) <= 512
+    finally:
+        router._AUTO_EXEC_SEEN.clear()
+
+
+
+def test_auto_exec_claims_are_session_scoped():
+    """Audit round 2: identical text in another chat must not lose its claim."""
+    router._auto_exec_reset()
+    try:
+        assert router._auto_exec_claim('s1', 'd1') is True
+        assert router._auto_exec_claim('s1', 'd1') is False
+        assert router._auto_exec_claim('s2', 'd1') is True,             'claims must be scoped per session, not global by digest'
+    finally:
+        router._auto_exec_reset()

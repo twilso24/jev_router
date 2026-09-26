@@ -142,6 +142,11 @@ def _parse(result: dict, fit_options: list | None = None) -> Signals | None:
         dw = answers['delegate_worthy']
         if tc.get('type') != 'choice' or not isinstance(tc.get('choice'), str):
             return None
+        choice = tc['choice']
+        if choice not in TASK_CLASSES:
+            # Out-of-options value: keep the batch, degrade to neutral chat
+            # instead of trusting arbitrary strings from the judgment.
+            choice = 'chat'
         conf = _num(tc.get('confidence'))
         comp = _num(cx.get('score'))
         vis = _num(vn.get('noul'))
@@ -171,7 +176,7 @@ def _parse(result: dict, fit_options: list | None = None) -> Signals | None:
         except Exception:
             prof = None
         return Signals(
-            task_class=tc['choice'],
+            task_class=choice,
             task_class_confidence=conf,
             complexity=comp,
             vision_needed=vis,
