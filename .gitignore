@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .a0proj/
 wire-state.json
+plugin/
