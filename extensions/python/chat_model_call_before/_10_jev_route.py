@@ -95,6 +95,33 @@ def _instrument(ext, model, entry):
         _dbg('instrument failed: ' + str(exc))
 
 
+def _instrument_kept_model(ext, model):
+    # Keep-model fallback: the framework's cached model still serves the
+    # turn, so its real outcomes must reach telemetry + breaker too.
+    # Attribution comes from the framework model config; without a provider
+    # we stay silent rather than guess. Never raises.
+    try:
+        if model is None:
+            return
+        from usr.plugins.jev_router.helpers import call_tracker
+        if call_tracker.is_wrapped(model):
+            # keeps first-wrap attribution (breaker is provider-scoped so
+            # unaffected; telemetry preset label stays from the original wrap)
+            return
+        conf = getattr(model, 'a0_model_conf', None)
+        provider = str(getattr(conf, 'provider', '') or '')
+        if not provider:
+            return
+        name = str(getattr(conf, 'name', '') or provider)
+
+        def on_outcome(prov, preset, ok, duration, error):
+            _on_call_outcome(ext, prov, preset, ok, duration, error)
+
+        call_tracker.instrument(model, provider, name, on_outcome)
+    except Exception as exc:
+        _dbg('kept-model instrument failed: ' + str(exc))
+
+
 def _on_call_outcome(ext, provider, preset, ok, duration, error):
     # breaker feedback from real outcomes (config thresholds)
     try:
@@ -219,6 +246,10 @@ class JevRouteChatCall(Extension):
                 if len(DECISION_CACHE) >= DECISION_CACHE_MAX:
                     DECISION_CACHE.pop(next(iter(DECISION_CACHE)))
                 DECISION_CACHE[cache_key] = (result.model, result.reason)
+            else:
+                # keep-model fallback: still track the framework model's
+                # real outcomes (telemetry + breaker feedback)
+                _instrument_kept_model(self, call_data.get('model'))
 
             if advice_pending['text']:
                 try:
