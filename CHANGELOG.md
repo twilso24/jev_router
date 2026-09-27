@@ -2,6 +2,14 @@
 
 All notable changes to the Jev Router plugin.
 
+## [0.7.1] - 2026-09-27
+
+### Fixed
+- **Panel exclude saves failed with `error: write failed`:** `write_provider_rules` imported `helpers.tuning` via an absolute import that bound to the framework namespace package in the live process (no such module there), the swallowed exception failed every provider exclude/re-include save from the panel chips. Now uses a relative import like the rest of the package. Regression tests: a subprocess test reproducing the live process import graph and a static guard banning absolute `helpers` imports inside the helpers package.
+- **Recovered providers stayed flagged as failing in the panel:** the chip "failing" state used raw failure counts with no recency, so one old failure kept an orange flag until 200 newer calls pushed it out. `provider_call_stats` now reports `last_ok` (latest outcome in the window) and the panel flags a provider failing only while its latest recorded outcome is a failure. Regression tests cover both layers.
+- **Call outcomes stopped being recorded under the unified-turn chat path:** the framework chat turn now invokes `unified_turn`, but the call tracker wrapped only `unified_call`, so real outcomes (breaker feedback + telemetry) silently vanished and a recovered provider kept its last failure forever. The tracker now wraps both entry points with an in-flight guard (exactly one report per call, delegation-safe, same idempotency and never-raise guarantees). Five regression tests including concurrency.
+- **Keep-model fallbacks remained untracked:** when Jev was unavailable, the framework kept its cached chat model, but the extension only instrumented models created by the router. Those fallback calls therefore produced no breaker feedback or telemetry, leaving a recovered provider stuck on an old failure. Fallback models are now instrumented from their framework `a0_model_conf` attribution when available; unattributable models are skipped silently. Extension regression tests cover success, failure, missing attribution, empty-provider skip, and empty-name fallback to provider; the tracker now logs swallowed kept-model instrumentation failures and `is_wrapped` has direct coverage.
+
 ## [0.7.0] - 2026-09-25
 
 ### Added
