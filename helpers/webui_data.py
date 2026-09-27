@@ -86,7 +86,7 @@ def write_provider_rules(path: Path, exclude: list | None = None) -> bool:
                 if sx and sx not in dedup:
                     dedup.append(sx)
             data['provider_rules']['exclude'] = dedup
-        from helpers.tuning import _POLICY_LOCK, _atomic_yaml_write
+        from .tuning import _POLICY_LOCK, _atomic_yaml_write
         with _POLICY_LOCK:
             return _atomic_yaml_write(Path(path), data)
     except Exception:
@@ -130,13 +130,22 @@ def tuning_report(db_path: Path, policy_path: Path,
         + excludes + list(prov_stats.keys())))
     tripped = set(breaker_mod.excluded_providers(providers)) if providers else set()
     eset = set(excludes)
-    provider_states = [{
-        'provider': pr,
-        'excluded': pr in eset,
-        'tripped': pr in tripped,
-        'ok': (prov_stats.get(pr) or {}).get('ok', 0),
-        'fail': (prov_stats.get(pr) or {}).get('fail', 0),
-    } for pr in providers]
+    def _pstate(pr):
+        st = prov_stats.get(pr) or {}
+        last_ok = st.get('last_ok')
+        # failing only while the latest recorded outcome is a failure:
+        # old failures with a newer success mean the provider recovered.
+        return {
+            'provider': pr,
+            'excluded': pr in eset,
+            'tripped': pr in tripped,
+            'ok': st.get('ok', 0),
+            'fail': st.get('fail', 0),
+            'last_ok': last_ok,
+            'failing': bool(st.get('fail', 0)) and last_ok is False,
+        }
+
+    provider_states = [_pstate(pr) for pr in providers]
 
     # Auto-wire visibility: presets missing from all band orders + last
     # wire report (sidecar next to the policy file).

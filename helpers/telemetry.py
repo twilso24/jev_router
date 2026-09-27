@@ -142,13 +142,23 @@ def preset_call_stats(conn: sqlite3.Connection, limit: int = 200) -> dict:
 
 
 def provider_call_stats(conn: sqlite3.Connection, limit: int = 200) -> dict:
-    """Aggregate ok/fail counts per provider over the most recent calls."""
+    """Aggregate ok/fail counts per provider over the most recent calls.
+
+    last_ok mirrors each provider's most recent outcome in the window so
+    the UI can tell a recovered provider (old failures, latest call ok)
+    from one that is still failing. Rows arrive newest-first, so the first
+    row seen per provider fixes last_ok.
+    """
     cur = conn.execute(
         'SELECT provider, ok FROM calls ORDER BY id DESC LIMIT ?',
         (int(limit),))
     stats: dict = {}
     for row in cur.fetchall():
-        slot = stats.setdefault(row['provider'], {'ok': 0, 'fail': 0})
+        # rows arrive newest-first: the first row seen per provider pins
+        # last_ok; reordering this query would invert recovery semantics
+        slot = stats.setdefault(
+            row['provider'],
+            {'ok': 0, 'fail': 0, 'last_ok': bool(row['ok'])})
         if row['ok']:
             slot['ok'] += 1
         else:

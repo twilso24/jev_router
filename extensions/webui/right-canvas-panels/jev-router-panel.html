@@ -808,7 +808,7 @@ function initPanel(root) {
       let title;
       if (ps.tripped) { cls += ' tripped'; label = String.fromCharCode(0x26D4) + ' ' + pr; title = 'breaker tripped - click to reset'; }
       else if (ps.excluded) { cls += ' excl'; title = 'excluded by policy - click to re-include'; }
-      else if (ps.fail > 0) { cls += ' failing'; title = ps.fail + ' recent failures - click to exclude'; }
+      else if (ps.failing) { cls += ' failing'; title = ps.fail + ' recent failures - click to exclude'; }
       else { title = 'healthy - click to exclude'; }
       const chip = el('button', cls, label);
       chip.type = 'button';

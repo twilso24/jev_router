@@ -297,3 +297,88 @@ def test_write_provider_rules_torn_dump_leaves_original(tmp_path, monkeypatch):
         'a torn dump must never corrupt the live policy'
     leftovers = [q.name for q in tmp_path.iterdir() if q.name != 'rp.yaml']
     assert leftovers == [], leftovers
+
+
+# --- Regression: framework-process namespace shadowing ---
+
+
+def test_write_provider_rules_under_framework_namespace(tmp_path):
+    """Reproduce the live framework import graph against the REPO tree:
+    top-level `helpers` must be the framework namespace package (/a0/helpers,
+    no tuning module) while the plugin imports as usr.plugins.jev_router.
+    The plugin skeleton is built from this repo's helpers/, so the test gates
+    the code under review - never whatever happens to be deployed."""
+    import os
+    import shutil
+    import subprocess
+
+    skel = tmp_path / 'usr' / 'plugins' / 'jev_router'
+    skel.mkdir(parents=True)
+    shutil.copytree(PLUGIN_ROOT / 'helpers', skel / 'helpers',
+                    ignore=shutil.ignore_patterns('__pycache__'))
+
+    policy = tmp_path / 'rp.yaml'
+    policy.write_text('provider_rules:\n  include: []\n  exclude: []\n')
+    env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+    code = (
+        'import sys\n'
+        "sys.path[:] = [p for p in sys.path\n"
+        "               if p not in ('', '.', '/a0/usr/projects/jev_router')]\n"
+        "sys.path.insert(0, '/a0')\n"
+        "sys.path.insert(0, '/a0/usr/plugins')\n"
+        "sys.path.insert(0, " + repr(str(tmp_path)) + ")\n"
+        'import helpers\n'
+        "assert getattr(helpers, '__file__', None) is None, (\n"
+        "    'helpers must be the framework namespace package')\n"
+        'import usr.plugins.jev_router.helpers.webui_data as m\n'
+        "assert '/a0/usr/plugins/jev_router' not in m.__file__, (\n"
+        "    'test must gate the repo skeleton, not the deployed copy: '\n"
+        "    + m.__file__)\n"
+        'ok = m.write_provider_rules(\n'
+        '    ' + repr(str(policy)) + ", exclude=['zai_coding'])\n"
+        "print('WRITE_OK' if ok else 'WRITE_FAILED')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, '-c', code], cwd=str(tmp_path), env=env,
+        capture_output=True, text=True, timeout=120)
+    assert 'WRITE_OK' in proc.stdout, (
+        f'rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}')
+    import yaml as _yaml
+    loaded = _yaml.safe_load(policy.read_text())
+    assert loaded['provider_rules']['exclude'] == ['zai_coding']
+
+
+def test_helpers_package_avoids_absolute_helpers_imports():
+    """The helpers package is imported as usr.plugins.jev_router.helpers in
+    the framework process; an absolute `from helpers...` import can bind to
+    the framework namespace package instead. Guard the whole package."""
+    bad = []
+    for f in sorted((PLUGIN_ROOT / 'helpers').glob('*.py')):
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            s = line.strip()
+            if s.startswith(('from helpers.', 'from helpers import',
+                             'import helpers')):
+                bad.append(f'{f.name}:{n}: {s}')
+    assert bad == [], ('absolute helpers imports bind to the framework '
+                      'namespace package in production: ' + str(bad))
+
+
+def test_tuning_report_failing_flag_reflects_last_outcome(tmp_path):
+    """A provider whose latest call succeeded must not be flagged failing,
+    even when older failures are still inside the stats window."""
+    db = Path(tmp_path) / 't.db'
+    conn = tel_mod.init_db(db)
+    tel_mod.record_call(conn, 'recovered', 'Preset A', False, 0.1, 'boom')
+    tel_mod.record_call(conn, 'recovered', 'Preset A', True, 0.1, None)
+    tel_mod.record_call(conn, 'down', 'Preset B', True, 0.1, None)
+    tel_mod.record_call(conn, 'down', 'Preset B', False, 0.1, 'boom')
+    conn.close()
+    rep = webui_data.tuning_report(
+        db, Path(tmp_path) / 'policy.yaml', [],
+        pool_providers=['recovered', 'down', 'idle'])
+    states = {s['provider']: s for s in rep['provider_states']}
+    assert states['recovered']['failing'] is False
+    assert states['recovered']['last_ok'] is True
+    assert states['down']['failing'] is True
+    assert states['down']['last_ok'] is False
+    assert states['idle']['failing'] is False

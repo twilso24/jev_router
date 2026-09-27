@@ -89,8 +89,8 @@ def test_provider_call_stats():
         telemetry.record_call(conn, 'prov1', 'Default', False, 0.2, 'e')
         telemetry.record_call(conn, 'prov2', 'Fast', True, 0.1, None)
         stats = telemetry.provider_call_stats(conn, limit=100)
-        assert stats['prov1'] == {'ok': 1, 'fail': 1}
-        assert stats['prov2'] == {'ok': 1, 'fail': 0}
+        assert stats['prov1'] == {'ok': 1, 'fail': 1, 'last_ok': False}
+        assert stats['prov2'] == {'ok': 1, 'fail': 0, 'last_ok': True}
         conn.close()
 
 
@@ -258,3 +258,24 @@ def test_legacy_db_gains_delegation_and_auto_exec_columns():
         conn.close()
         assert row['delegation'] == 'directed'
         assert row['auto_exec'] == 1
+
+
+def test_provider_call_stats_last_ok_latest_outcome_wins():
+    """last_ok mirrors the most recent outcome so the UI can tell a
+    recovered provider from a currently failing one."""
+    import tempfile
+    from helpers import telemetry as tel
+    with tempfile.TemporaryDirectory() as td:
+        conn = tel.init_db(Path(td) / 't.db')
+        tel.record_call(conn, 'rec', 'presetA', False, 0.1, 'boom')
+        tel.record_call(conn, 'rec', 'presetA', True, 0.1, None)
+        tel.record_call(conn, 'down', 'presetB', True, 0.1, None)
+        tel.record_call(conn, 'down', 'presetB', False, 0.1, 'boom')
+        stats = tel.provider_call_stats(conn, limit=100)
+        conn.close()
+    assert (stats['rec']['ok'], stats['rec']['fail']) == (1, 1)
+    assert stats['rec']['last_ok'] is True, \
+        'latest outcome is a success -> provider recovered'
+    assert (stats['down']['ok'], stats['down']['fail']) == (1, 1)
+    assert stats['down']['last_ok'] is False, \
+        'latest outcome is a failure -> still failing'
