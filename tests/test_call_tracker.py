@@ -104,3 +104,131 @@ def _main():
 
 if __name__ == '__main__':
     _main()
+
+
+
+# --- Regression: framework chat turns call unified_turn, not unified_call ---
+
+
+class _TurnModel:
+    def __init__(self, behave='ok'):
+        self.behave = behave
+        self.turns = 0
+
+    async def unified_turn(self, **kwargs):
+        self.turns += 1
+        if self.behave == 'raise':
+            raise RuntimeError('boom')
+        return ('resp', 'reasoning')
+
+
+class _DelegatingModel:
+    # unified_call internally delegating to unified_turn: no double-report
+    async def unified_turn(self, **kwargs):
+        return 'turn-resp'
+
+    async def unified_call(self, **kwargs):
+        return await self.unified_turn(**kwargs)
+
+
+def test_instrument_wraps_unified_turn():
+    m = _TurnModel()
+    seen = []
+    assert call_tracker.instrument(
+        m, 'prov', 'Preset', lambda *a: seen.append(a)) is True
+    resp = _run(m.unified_turn(messages=[]))
+    assert resp == ('resp', 'reasoning')
+    assert len(seen) == 1
+    provider, preset, ok, dur, err = seen[0]
+    assert provider == 'prov' and preset == 'Preset'
+    assert ok is True and err is None and dur >= 0
+
+
+def test_unified_turn_failure_records_and_reraises():
+    m = _TurnModel('raise')
+    seen = []
+    call_tracker.instrument(
+        m, 'prov', 'Preset', lambda *a: seen.append(a))
+    try:
+        _run(m.unified_turn(messages=[]))
+        raise AssertionError('should have raised')
+    except RuntimeError as exc:
+        assert str(exc) == 'boom'
+    assert len(seen) == 1
+    provider, preset, ok, dur, err = seen[0]
+    assert ok is False and err == 'boom'
+
+
+def test_instrument_wraps_both_call_and_turn_once():
+    class _Both(_FakeModel):
+        def __init__(self, behave='ok'):
+            super().__init__(behave)
+            self.turns = 0
+
+        async def unified_turn(self, **kwargs):
+            self.turns += 1
+            return 'turn-resp'
+
+    m = _Both()
+    seen = []
+    assert call_tracker.instrument(
+        m, 'prov', 'Preset', lambda *a: seen.append(a)) is True
+    # re-instrument on an already-wrapped (cached) model refreshes the
+    # callback instead of double-wrapping
+    seen2 = []
+    assert call_tracker.instrument(
+        m, 'prov2', 'Preset2', lambda *a: seen2.append(a)) is False
+    _run(m.unified_call(messages=[]))
+    _run(m.unified_turn(messages=[]))
+    assert m.calls == 1 and m.turns == 1   # methods executed exactly once
+    assert seen == []                      # old callback was replaced
+    assert len(seen2) == 2                 # one report per framework call
+    for report in seen2:
+        provider, preset, ok, dur, err = report
+        assert provider == 'prov2' and preset == 'Preset2'
+
+
+def test_internal_delegation_reports_once():
+    m = _DelegatingModel()
+    seen = []
+    call_tracker.instrument(
+        m, 'prov', 'Preset', lambda *a: seen.append(a))
+    resp = _run(m.unified_call(messages=[]))
+    assert resp == 'turn-resp'
+    assert len(seen) == 1  # inner unified_turn must not double-report
+
+
+
+def test_concurrent_calls_both_report():
+    """Concurrent calls on one (cached) instance each report their own
+    outcome; only same-task delegation may suppress a report."""
+    class _Slow:
+        def __init__(self):
+            self.turns = 0
+
+        async def unified_turn(self, **kwargs):
+            self.turns += 1
+            await asyncio.sleep(0.01)
+            return ('r', 'reason')
+
+    m = _Slow()
+    seen = []
+    call_tracker.instrument(m, 'prov', 'P', lambda *a: seen.append(a))
+
+    async def two():
+        return await asyncio.gather(
+            m.unified_turn(messages=[]), m.unified_turn(messages=[]))
+
+    res = asyncio.run(two())
+    assert len(res) == 2
+    assert m.turns == 2
+    assert len(seen) == 2, (
+        'each concurrent call must report exactly one outcome')
+
+
+
+def test_is_wrapped_reflects_instrument_state():
+    m = _FakeModel()
+    assert call_tracker.is_wrapped(m) is False
+    call_tracker.instrument(m, 'prov', 'Preset', lambda *a: None)
+    assert call_tracker.is_wrapped(m) is True
