@@ -75,6 +75,10 @@ class JevPreselectUi(Extension):
                 cfg = {}
 
             from usr.plugins.jev_router.helpers import preselect
+            from usr.plugins.jev_router.helpers.gate import routing_allowed_agent
+            if not routing_allowed_agent(agent, cfg):
+                _dbg("ui skip: routing disabled (global or per-chat)")
+                return
             if not preselect.should_preselect(cfg):
                 return
 

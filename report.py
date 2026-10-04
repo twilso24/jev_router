@@ -9,10 +9,20 @@ from pathlib import Path
 DEFAULT_DB = Path('/a0/tmp/jev_router_telemetry.db')
 
 
-def main() -> int:
-    args = sys.argv[1:]
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    args = argv
     if args and args[0] == 'dial':
         return _main_dial(args[1:])
+    if args and args[0] == 'percentile':
+        return _main_percentile(args[1:])
+    if args and args[0] == 'fallback':
+        return _main_fallback(args[1:])
+    if args and args[0] == 'session':
+        return _main_session(args[1:])
+    if args and args[0] == 'shadow':
+        return _main_shadow(args[1:])
     limit = int(args[0]) if args else 20
     db = Path(args[1]) if len(args) > 1 else DEFAULT_DB
     if not db.exists():
@@ -38,22 +48,17 @@ def main() -> int:
     return 0
 
 
-def dial_summary(config_path, policy_path, telemetry_path) -> dict:
-    """Dial-aware evidence summary; pure read, never raises.
+def evidence_summary(config_path, policy_path, telemetry_path) -> dict:
+    """Evidence summary; pure read, never raises. No performance dial.
 
-    Returns {dial, auto_tune, pins, preset_stats, orders} where orders are
-    the policy file orders with the performance dial applied (pinned bands
-    keep file order). preset_stats are per-preset ok/fail outcomes from the
-    telemetry DB - the evidence auto-tune ranks on. Missing or malformed
-    inputs fall back to safe defaults (balanced, off, empty).
+    Returns {auto_tune, pins, preset_stats, orders} where orders are the
+    policy file orders exactly (band orders are the sole ranking truth;
+    pins freeze a band against auto-tune, nothing re-ranks it). preset_stats
+    are per-preset ok/fail outcomes from the telemetry DB - the evidence
+    auto-tune ranks on. Missing or malformed inputs fall back to safe
+    defaults (off, empty).
     """
     try:
-        dial = 'balanced'
-        try:
-            data = json.loads(Path(config_path).read_text())
-            dial = str(data.get('performance_dial') or 'balanced')
-        except Exception:
-            dial = 'balanced'
         auto_tune = False
         pins = {}
         orders = {}
@@ -67,30 +72,27 @@ def dial_summary(config_path, policy_path, telemetry_path) -> dict:
         except Exception:
             auto_tune, pins, orders = False, {}, {}
         stats = {}
+        band_stats = {}
         try:
-            from helpers.telemetry import preset_call_stats
+            from helpers.telemetry import (preset_call_stats,
+                                           band_preset_call_stats)
             tp = Path(telemetry_path)
             if tp.exists():
                 conn = sqlite3.connect(tp)
                 conn.row_factory = sqlite3.Row
                 try:
                     stats = preset_call_stats(conn)
+                    band_stats = band_preset_call_stats(conn)
                 finally:
                     conn.close()
         except Exception:
-            stats = {}
-        out_orders = orders
-        if dial != 'balanced':
-            try:
-                from helpers.dial import apply_dial
-                out_orders = apply_dial(orders, dial, pins)
-            except Exception:
-                out_orders = orders
-        return {'dial': dial, 'auto_tune': bool(auto_tune), 'pins': pins,
-                'preset_stats': stats, 'orders': out_orders}
+            stats, band_stats = {}, {}
+        return {'auto_tune': bool(auto_tune), 'pins': pins,
+                'preset_stats': stats, 'orders': orders,
+                'band_stats': band_stats}
     except Exception:
-        return {'dial': 'balanced', 'auto_tune': False, 'pins': {},
-                'preset_stats': {}, 'orders': {}}
+        return {'auto_tune': False, 'pins': {},
+                'preset_stats': {}, 'orders': {}, 'band_stats': {}}
 
 
 def _main_dial(args) -> int:
@@ -98,9 +100,9 @@ def _main_dial(args) -> int:
     cfg = Path(args[0]) if len(args) > 0 else here / 'config.json'
     pol = Path(args[1]) if len(args) > 1 else here / 'routing-policy.yaml'
     db = Path(args[2]) if len(args) > 2 else DEFAULT_DB
-    s = dial_summary(cfg, pol, db)
+    s = evidence_summary(cfg, pol, db)
     pins = [b for b, v in s['pins'].items() if v] or 'none'
-    print(f"dial={s['dial']} auto_tune={'on' if s['auto_tune'] else 'off'} "
+    print(f"auto_tune={'on' if s['auto_tune'] else 'off'} "
           f"pins={pins} ({db})")
     if s['preset_stats']:
         print('per-preset call outcomes (recent):')
@@ -109,10 +111,148 @@ def _main_dial(args) -> int:
             print(f"  {name}: ok={st['ok']} fail={st['fail']}")
     else:
         print('no call outcomes recorded yet')
+    if s.get('band_stats'):
+        print('per-band call outcomes (band=' + ',band='.join(
+            sorted(s['band_stats'])) + '):')
+        for band in sorted(s['band_stats']):
+            for name in sorted(s['band_stats'][band]):
+                st = s['band_stats'][band][name]
+                print(f"  band={band} {name}: ok={st['ok']} fail={st['fail']}")
     if s['orders']:
-        print('orders (file + dial, pins honored):')
+        print('orders (file, pins honored):')
         for band in sorted(s['orders']):
             print(f"  {band}: {' > '.join(s['orders'][band])}")
+    return 0
+
+
+def _main_percentile(args) -> int:
+    here = Path(__file__).resolve().parent
+    db = Path(args[0]) if len(args) > 0 else DEFAULT_DB
+    if not db.exists():
+        print(f'no telemetry db at {db}')
+        return 1
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        from helpers.telemetry import preset_duration_stats
+        stats = preset_duration_stats(conn)
+    finally:
+        conn.close()
+    if not stats:
+        print('no call durations recorded yet')
+        return 0
+    print(f'Per-preset latency percentiles (p50/p95/p99) over recent successful calls ({db}):')
+    for preset in sorted(stats):
+        s = stats[preset]
+        print(f"  {preset}: p50={s['p50']:.3f}s p95={s['p95']:.3f}s p99={s['p99']:.3f}s (count={s['count']}, avg={s['avg']:.3f}s)")
+    return 0
+
+
+def _main_fallback(args) -> int:
+    here = Path(__file__).resolve().parent
+    db = Path(args[0]) if len(args) > 0 else DEFAULT_DB
+    if not db.exists():
+        print(f'no telemetry db at {db}')
+        return 1
+    from helpers.telemetry import init_db, preset_call_stats
+    conn = init_db(db)
+    try:
+        stats = preset_call_stats(conn)
+        # Also show fallback info from recent calls
+        cur = conn.execute(
+            'SELECT provider, preset, ok, error, fallback_from_preset '
+            'FROM calls WHERE fallback_from_preset IS NOT NULL '
+            'ORDER BY id DESC LIMIT 20')
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    
+    if not rows:
+        print('no fallback calls recorded yet')
+        if stats:
+            print('per-preset call outcomes (recent):')
+            for name in sorted(stats):
+                st = stats[name]
+                print(f"  {name}: ok={st['ok']} fail={st['fail']}")
+        return 0
+    
+    print(f'Recent fallback calls ({db}):')
+    for r in rows:
+        status = 'OK' if r['ok'] else 'FAIL'
+        fallback_info = f" <- fallback from {r['fallback_from_preset']}" if r['fallback_from_preset'] else ''
+        err = f" | {r['error']}" if r['error'] else ''
+        print(f"  {r['provider']}/{r['preset']} {status}{fallback_info}{err}")
+    return 0
+
+
+def _main_session(args) -> int:
+    here = Path(__file__).resolve().parent
+    db = Path(args[0]) if len(args) > 0 else DEFAULT_DB
+    session_id = args[1] if len(args) > 1 else None
+    if not db.exists():
+        print(f'no telemetry db at {db}')
+        return 1
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        from helpers.telemetry import session_decision_stats
+        if session_id:
+            stats = session_decision_stats(conn, session_id)
+            print(f'Session {session_id} stats ({db}):')
+            print(f"  Decisions: {stats['decisions']}")
+            print(f"  Model switches: {stats['model_switches']}")
+            print(f"  Fallback rate: {stats['fallback_rate']:.1%}")
+            if stats['band_dist']:
+                print('  Band distribution:')
+                for band, count in sorted(stats['band_dist'].items()):
+                    print(f"    {band}: {count}")
+        else:
+            # Show all sessions summary
+            cur = conn.execute(
+                'SELECT session_id, COUNT(*) as cnt, '
+                'SUM(CASE WHEN target IS NULL OR target = "" THEN 1 ELSE 0 END) as fallbacks '
+                'FROM decisions WHERE session_id != "" '
+                'GROUP BY session_id ORDER BY MAX(id) DESC LIMIT 20')
+            rows = cur.fetchall()
+            if not rows:
+                print('no session data recorded yet')
+                return 0
+            print(f'Recent sessions ({db}):')
+            for r in rows:
+                fb_rate = r['fallbacks'] / r['cnt'] if r['cnt'] > 0 else 0
+                print(f"  {r['session_id']}: {r['cnt']} decisions, {fb_rate:.1%} fallback")
+    finally:
+        conn.close()
+    return 0
+
+
+def _main_shadow(args) -> int:
+    here = Path(__file__).resolve().parent
+    db = Path(args[0]) if len(args) > 0 else DEFAULT_DB
+    if not db.exists():
+        print(f'no telemetry db at {db}')
+        return 1
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            'SELECT ts, target, shadow_target, band, reason '
+            'FROM decisions WHERE shadow_target IS NOT NULL '
+            'ORDER BY id DESC LIMIT 20')
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    
+    if not rows:
+        print('no shadow mode decisions recorded yet')
+        return 0
+    
+    print(f'Shadow mode decisions (actual vs predicted) ({db}):')
+    for r in rows:
+        actual = r['target'] or 'KEEP-MODEL'
+        predicted = r['shadow_target']
+        match = '✓' if actual == predicted else '✗'
+        print(f"  {match} actual={actual} predicted={predicted} band={r['band']} | {r['reason'][:60]}")
     return 0
 
 

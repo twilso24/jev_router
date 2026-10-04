@@ -3,7 +3,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import circuit_breaker as breaker_mod, dial as dial_mod, eligibility, fastpath, gate as gate_mod, mentions as mentions_mod, messages as messages_mod, policy as policy_mod, schedules as schedules_mod, signals as signals_mod, telemetry, tuning as tuning_mod
+from . import circuit_breaker as breaker_mod, eligibility, fastpath, gate as gate_mod, mentions as mentions_mod, messages as messages_mod, policy as policy_mod, schedules as schedules_mod, signals as signals_mod, telemetry, tuning as tuning_mod, local_model_tracker as lmt_mod
 from .pool import PoolEntry
 from .signals import Signals
 
@@ -16,6 +16,9 @@ class RouteResult:
     advice: str | None = None  # delegation advice when gate recommends
     rule: str = ''
     reason_human: str = ''
+    intended_preset: str | None = None  # preset that was meant to serve this call
+    band: str = ''          # complexity band that served the call (reasoning effort)
+    entry: object = None    # PoolEntry with provider/model/ctx_length for reasoning effort
 
 
 def _digest(message: str) -> str:
@@ -51,14 +54,20 @@ def _auto_exec_reset() -> None:
 
 def _record_safe(db_path: Path, decision, sig, digest,
                  session_id: str = '', delegation: str = '',
-                 auto_exec: bool = False) -> str | None:
+                 auto_exec: bool = False,
+                 obs_fallback: bool = True,
+                 obs_session: bool = True,
+                 obs_shadow: bool = True) -> str | None:
     """Best-effort telemetry write; returns error string or None."""
     try:
         conn = telemetry.init_db(db_path)
         try:
             telemetry.record_decision(
                 conn, decision, sig, digest, session_id=session_id,
-                delegation=delegation, auto_exec=auto_exec)
+                delegation=delegation, auto_exec=auto_exec,
+                obs_fallback=obs_fallback,
+                obs_session=obs_session,
+                obs_shadow=obs_shadow)
         finally:
             conn.close()
         return None
@@ -92,6 +101,9 @@ async def route(
     telemetry_path: Path | None = None,
     session_id: str = '',
     agent_profile: str = '',
+    obs_fallback: bool = True,
+    obs_session: bool = True,
+    obs_shadow: bool = True,
 ) -> RouteResult:
     digest = _digest(message or '')
     try:
@@ -116,15 +128,8 @@ async def route(
                 auto_tag = ' [auto-tune]'
         except Exception:
             auto_tag = ''
-        # Performance dial: explicit user emphasis re-ranks bands after
-        # auto-tune; pinned bands are skipped (manual wins). balanced = no-op.
-        try:
-            dial_name = str(cfg.get('performance_dial') or 'balanced')
-            if dial_name != 'balanced':
-                pins = tuning_mod.read_pinned_bands(policy_path)
-                band_orders = dial_mod.apply_dial(band_orders, dial_name, pins)
-        except Exception:
-            pass
+        # Band orders are the sole ranking truth (no performance dial):
+        # auto-tune may reorder unpinned bands, pins freeze their file order.
         sched_tag = ''
         active = schedules_mod.active_schedule(
             schedules_mod.load_schedules(policy_path))
@@ -172,6 +177,20 @@ async def route(
                             if e.provider not in tripped]
             breaker_tag = ' [circuit-breaker]'
 
+        # Guard rail (layer 3): surface band-order names that match no live
+        # preset so a silent fallthrough-to-Default becomes visible.
+        try:
+            missing_orders = policy_mod.validate_band_orders(
+                band_orders, sorted({e.preset_name for e in pool_entries}))
+            if missing_orders:
+                flat = []
+                for band, names in sorted(missing_orders.items()):
+                    flat.append(band + ':' + ','.join(names))
+                signals_mod._dbg(
+                    'WARNING band-orders unresolved ' + ' | '.join(flat))
+        except Exception:
+            pass
+
         if fastpath.is_trivial(clean, attachments):
             pseudo = Signals(task_class='chat', task_class_confidence=1.0,
                              complexity=0.0, vision_needed=0.0,
@@ -181,22 +200,28 @@ async def route(
             if decision.entry is None:
                 return RouteResult(
                     None, f'fast-path: {decision.reason}', True,
-                    rule=decision.rule, reason_human=decision.reason_human)
+                    rule=decision.rule, reason_human=decision.reason_human,
+                    intended_preset=None)
             try:
+                # Track cold-start for local providers
+                call_start_ts = lmt_mod.record_call_start(decision.entry.provider)
                 model = model_factory(decision.entry)
             except Exception as exc:
                 breaker_mod.record_fail(
                     decision.entry.provider, threshold=thr,
                     cooldown_hours=cd)
+                lmt_mod.record_call_outcome(decision.entry.provider, call_start_ts, False, str(exc))
                 return RouteResult(
                     None,
                     f'fast-path: model factory failed ({exc}); keeping model',
                     True)
+            lmt_mod.record_call_outcome(decision.entry.provider, call_start_ts, True, None)
             if telemetry_path is not None:
                 _record_safe(telemetry_path, decision, pseudo, digest, session_id=session_id)
             return RouteResult(
                 model, f'fast-path: trivial message; {decision.reason}', False,
-                rule=decision.rule, reason_human=decision.reason_human)
+                rule=decision.rule, reason_human=decision.reason_human,
+                band=decision.band)
 
         # Full path: Jev batch.
         sig = await signals_mod.judge(
@@ -220,10 +245,34 @@ async def route(
                 _record_safe(telemetry_path, decision, None, digest, session_id=session_id)
             return RouteResult(None, decision.reason, True,
                                rule=decision.rule,
-                               reason_human=decision.reason_human)
+                               reason_human=decision.reason_human,
+                               intended_preset=None)
 
         decision = policy_mod.resolve(sig, pool_entries, band_orders=band_orders, honor_fit=fit_enabled, fit_min_confidence=fit_min_conf)
         decision.reason += sched_tag + mention_tag + breaker_tag + auto_tag
+
+        # Post-decision context overflow detection for local providers
+        # If the selected preset is a local model with constrained context window,
+        # check if the message history exceeds the pressure threshold and
+        # trigger tiny-local delegation via context_overflow task class.
+        try:
+            if (decision.entry is not None
+                    and lmt_mod.is_local_provider(decision.entry.provider)
+                    and decision.entry.ctx_length and decision.entry.ctx_length > 0):
+                # Rough token estimation from message (4 chars ≈ 1 token)
+                estimated_tokens = max(1, len(clean) // 4)
+                if lmt_mod.record_context_pressure(
+                        decision.entry.provider,
+                        decision.entry.ctx_length,
+                        estimated_tokens):
+                    # Context pressure detected: override task_class to trigger
+                    # context_overflow -> tiny-local delegation in gate.
+                    sig.task_class = 'context_overflow'
+                    # Note: delegate_worthy from Jev is preserved; gate threshold
+                    # still applies.
+        except Exception:
+            pass  # never break routing for observability
+
         gate_res = gate_mod.evaluate(sig, cfg)
         auto_exec_fired = False
         if gate_res.auto_exec:
@@ -247,13 +296,17 @@ async def route(
                              auto_exec=auto_exec_fired)
             return RouteResult(None, decision.reason, True, advice=advice,
                                rule=decision.rule,
-                               reason_human=decision.reason_human)
+                               reason_human=decision.reason_human,
+                               intended_preset=None)
 
         try:
+            # Track cold-start for local providers
+            call_start_ts = lmt_mod.record_call_start(decision.entry.provider)
             model = model_factory(decision.entry)
         except Exception as exc:
             breaker_mod.record_fail(
                 decision.entry.provider, threshold=thr, cooldown_hours=cd)
+            lmt_mod.record_call_outcome(decision.entry.provider, call_start_ts, False, str(exc))
             reason = f'model factory failed for {decision.entry.preset_name} ({exc}); keeping model'
             if telemetry_path is not None:
                 _record_safe(telemetry_path, decision, sig, digest,
@@ -261,7 +314,9 @@ async def route(
                              auto_exec=auto_exec_fired)
             return RouteResult(None, reason, True, advice=advice,
                                rule=decision.rule,
-                               reason_human=decision.reason_human)
+                               reason_human=decision.reason_human,
+                               intended_preset=decision.entry.preset_name)
+        lmt_mod.record_call_outcome(decision.entry.provider, call_start_ts, True, None)
 
         if telemetry_path is not None:
             _record_safe(telemetry_path, decision, sig, digest,
@@ -269,7 +324,9 @@ async def route(
                          auto_exec=auto_exec_fired)
         return RouteResult(model, decision.reason, False, advice=advice,
                            rule=decision.rule,
-                           reason_human=decision.reason_human)
+                           reason_human=decision.reason_human,
+                           band=decision.band,
+                           entry=decision.entry)
 
     except Exception as exc:  # never raise out of the router
         try:
@@ -279,4 +336,5 @@ async def route(
                 _record_safe(telemetry_path, decision, None, digest, session_id=session_id)
         except Exception:
             pass
-        return RouteResult(None, f'router error: {exc}; keeping model', True)
+        return RouteResult(None, f'router error: {exc}; keeping model', True,
+                           intended_preset=None)

@@ -117,3 +117,52 @@ if __name__ == '__main__':
             print(f'FAIL {t.__name__}: {type(exc).__name__}: {exc}')
     print(f'--- {len(tests) - failed}/{len(tests)} passed')
     sys.exit(1 if failed else 0)
+
+
+# --- RED: plain-language preset descriptions ---
+
+def test_load_pool_reads_optional_description(tmp_path):
+    p = tmp_path / 'presets.yaml'
+    p.write_text(yaml.safe_dump([
+        {'name': 'Storyteller',
+         'description': 'Creative writing, persona roleplay, prose polish; slow but expressive',
+         'chat': {'provider': 'p', 'name': 'm1', 'vision': False}},
+        {'name': 'Speedy',
+         'chat': {'provider': 'p', 'name': 'm2', 'vision': True}},
+    ]))
+    pool_ = pool.load_pool(p)
+    by_name = {e.preset_name: e for e in pool_.entries}
+    assert by_name['Storyteller'].description.startswith('Creative writing')
+    assert by_name['Speedy'].description == ''
+
+
+def test_description_default_field_absent():
+    from helpers.pool import PoolEntry
+    e = PoolEntry('X', 'chat', 'p', 'm')
+    assert e.description == ''
+
+
+def test_build_state_includes_description_when_present():
+    from helpers.pool import PoolEntry
+    from helpers import signals
+    e = PoolEntry('Storyteller', 'chat', 'p', 'm',
+                  description='creative writing persona')
+    st = signals.build_state('hi', [], pool_entries=[e])
+    assert st['available_models'][0]['description'] == 'creative writing persona'
+
+
+def test_preset_fit_criteria_include_description():
+    from helpers.pool import PoolEntry
+    from helpers import signals
+    entries = [
+        PoolEntry('Storyteller', 'chat', 'p', 'm1',
+                  description='creative writing persona'),
+        PoolEntry('Speedy', 'chat', 'p', 'm2'),
+    ]
+    q = signals.build_questions(pool_entries=entries)
+    crit = q['preset_fit']['criteria']
+    # description is the ONLY nuance signal (plain-text preset contract)
+    assert crit['Storyteller'] == 'creative writing persona'
+    # presets without a description get the neutral fallback, never
+    # technical facts — criteria must stay description-only
+    assert crit['Speedy'] == 'no description provided'

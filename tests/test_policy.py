@@ -293,9 +293,12 @@ def test_vision_filter_sets_rule_and_human_reason():
 
 
 def test_preferred_unavailable_sets_fallback_rule():
-    d = policy.resolve(_sig(cls='chat', comp=0.2), _entries())
+    # Pool has only 'Power': no light-band name (or alias) matches until
+    # 'Power' itself appears deep in the order -> fallback semantics.
+    entries = [PoolEntry('Power', 'chat', 'zai_coding', 'glm-5.3', vision=True)]
+    d = policy.resolve(_sig(cls='chat', comp=0.2), entries)
     assert d.rule == 'band-fallback'
-    assert d.entry.preset_name == 'Efficiency'
+    assert d.entry.preset_name == 'Power'
     assert 'unavailable' in d.reason_human.lower()
 
 
@@ -304,3 +307,89 @@ def test_empty_pool_sets_empty_rule():
     assert d.rule == 'empty'
     assert d.entry is None
     assert d.reason_human
+
+
+# --- RED: dynamic routing guard-rails - preset name normalization,
+# aliases, and band-order validation (bug: Default-only collapse) ---
+
+def _messy_entries():
+    # Mirrors the live pool: user-renameable preset names that do not
+    # literally match the first-class band-order names.
+    return [
+        PoolEntry('Default', 'chat', 'kilo_code_gateway', 'nemotron-ultra', vision=True),
+        PoolEntry('Efficient', 'chat', 'nvidia_nim', 'glm-5.3-flash', vision=True),
+        PoolEntry('High Power', 'chat', 'nvidia_nim', 'kimi-k3', vision=False),
+    ]
+
+
+def test_alias_light_band_picks_efficient_not_default():
+    # light order starts with Fast/Efficiency; pool only has 'Efficient'
+    d = policy.resolve(_sig(cls='chat', comp=0.2), _messy_entries())
+    assert d.entry.preset_name == 'Efficient', d.reason
+    assert d.band == 'light'
+
+
+def test_alias_heavy_band_picks_high_power_not_default():
+    # heavy order starts with Power; pool only has 'High Power'
+    d = policy.resolve(_sig(comp=1.8), _messy_entries())
+    assert d.entry.preset_name == 'High Power', d.reason
+    assert d.band == 'heavy'
+
+
+def test_alias_follows_band_order_position():
+    # 'Fast' aliases to 'Efficient' at its own order position; the earlier
+    # listed aliasable name wins over a direct match later in the order
+    entries = _messy_entries() + [
+        PoolEntry('Efficiency', 'chat', 'a0_venice', 'deepseek-v4', vision=True),
+    ]
+    d = policy.resolve(_sig(cls='chat', comp=0.2), entries)
+    assert d.entry.preset_name == 'Efficient', d.reason
+
+
+def test_alias_case_and_spacing_normalized():
+    entries = [
+        PoolEntry('default', 'chat', 'p', 'm', vision=True),
+        PoolEntry('HIGH-POWER', 'chat', 'p', 'm', vision=True),
+    ]
+    d = policy.resolve(_sig(comp=1.8), entries)
+    assert d.entry.preset_name == 'HIGH-POWER', d.reason
+
+
+def test_alias_medium_band_still_prefers_default():
+    d = policy.resolve(_sig(comp=1.0), _messy_entries())
+    assert d.entry.preset_name == 'Default', d.reason
+
+
+def test_alias_applies_to_jev_fit_pick():
+    sig = _sig(comp=1.8)
+    sig.preset_fit = 'Power'  # Jev names the first-class alias
+    sig.preset_fit_confidence = 0.9
+    d = policy.resolve(sig, _messy_entries())
+    assert d.entry.preset_name == 'High Power', d.reason
+    assert d.rule == 'fit'
+
+
+def test_validate_band_orders_reports_missing_names():
+    orders = {
+        'light': ['Fast', 'Default'],
+        'medium': ['Default'],
+        'heavy': ['Power', 'Unhinged'],
+    }
+    missing = policy.validate_band_orders(orders, ['Default', 'Efficient'])
+    # 'Fast' resolves via alias to 'Efficient' -> nothing missing in light
+    assert 'light' not in missing, missing
+    assert 'medium' not in missing, missing
+    # 'Power' resolves via alias to 'Efficient'? No - Power aliases to
+    # High Power only, so against this pool it is missing; Unhinged too.
+    assert missing['heavy'] == ['Power', 'Unhinged'], missing
+
+
+def test_validate_band_orders_all_present_or_aliasable():
+    orders = {
+        'light': ['Fast', 'Default'],
+        'medium': ['Default'],
+        'heavy': ['Power'],
+    }
+    missing = policy.validate_band_orders(
+        orders, ['Default', 'Efficient', 'High Power'])
+    assert missing == {}, missing

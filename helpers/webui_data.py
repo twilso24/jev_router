@@ -111,16 +111,29 @@ def tuning_report(db_path: Path, policy_path: Path,
 
     stats = {}
     prov_stats = {}
+    band_stats = {}
     try:
         if db_path.exists():
             conn = tel_mod.init_db(db_path)
             stats = tel_mod.preset_call_stats(conn, limit=limit)
             prov_stats = tel_mod.provider_call_stats(conn, limit=limit)
+            band_stats = tel_mod.band_preset_call_stats(conn, limit=limit)
             conn.close()
     except Exception:
-        stats, prov_stats = {}, {}
+        stats, prov_stats, band_stats = {}, {}, {}
 
-    suggested = tuning_mod.suggest_band_orders(current, pool_presets, stats)
+    # band-only ranking: bands without own evidence keep the user's file
+    # order - never re-ranked from global stats (Default-everywhere fix).
+    # Always pass a dict (band mode): an empty {} means no banded rows yet,
+    # which must keep file orders, NOT degrade to global ranking via None.
+    suggested = tuning_mod.suggest_band_orders(
+        current, pool_presets, stats, band_preset_stats=band_stats)
+    # pinned bands freeze in suggested too - the panel displays and Applies
+    # `suggested`, so unpinned suggestions would overwrite pinned content.
+    # Mirrors effective_band_orders (router contract). Pins > suggestion.
+    for band, pin in tuning_mod.read_pinned_bands(policy_path).items():
+        if pin and band in suggested and current.get(band):
+            suggested[band] = list(current[band])
     auto_tune = tuning_mod.read_auto_tune(policy_path)
 
     excludes = [str(x) for x in (
@@ -188,3 +201,145 @@ def pool_providers(presets_path: Path) -> list:
         return sorted(seen)
     except Exception:
         return []
+
+
+def fallback_chain_stats(db_path: Path, limit: int = 200) -> dict:
+    """Fallback chain statistics: which presets fell back to which."""
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f'db not found: {db_path}')
+        conn = tel_mod.init_db(db_path)
+        cur = conn.execute(
+            'SELECT preset, fallback_from_preset, ok, error, duration '
+            'FROM calls WHERE fallback_from_preset IS NOT NULL '
+            'ORDER BY id DESC LIMIT ?', (int(limit),))
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    fallback_map: dict = {}
+    fallback_calls = []
+    for r in rows:
+        preset = r['preset']
+        fallback_from = r['fallback_from_preset']
+        if preset and fallback_from:
+            key = f'{fallback_from}->{preset}'
+            if key not in fallback_map:
+                fallback_map[key] = {'count': 0, 'failures': 0, 'avg_duration': 0.0}
+            fallback_map[key]['count'] += 1
+            if not r['ok']:
+                fallback_map[key]['failures'] += 1
+            fallback_calls.append({
+                'preset': preset,
+                'fallback_from_preset': fallback_from,
+                'ok': bool(r['ok']),
+                'error': r['error'],
+                'duration': float(r['duration'] or 0),
+            })
+    
+    # Calculate avg duration per fallback chain
+    for key, data in fallback_map.items():
+        chain_calls = [c for c in fallback_calls if f"{c['fallback_from_preset']}->{c['preset']}" == key]
+        if chain_calls:
+            data['avg_duration'] = sum(c['duration'] for c in chain_calls) / len(chain_calls)
+
+    return {'fallback_map': fallback_map, 'fallback_calls': fallback_calls[:50]}
+
+
+def session_aggregates(db_path: Path, limit: int = 200) -> dict:
+    """Session-level aggregates from the decisions table."""
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f'db not found: {db_path}')
+        conn = tel_mod.init_db(db_path)
+        cur = conn.execute(
+            'SELECT session_id, COUNT(*) as cnt, '
+            'SUM(CASE WHEN target IS NULL OR target = "" THEN 1 ELSE 0 END) as fallbacks, '
+            'MIN(id) as first_id, MAX(id) as last_id '
+            'FROM decisions WHERE session_id != "" '
+            'GROUP BY session_id ORDER BY last_id DESC LIMIT ?', (int(limit),))
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    sessions = []
+    for r in rows:
+        sid = r['session_id']
+        cnt = r['cnt']
+        fallbacks = r['fallbacks']
+        # Get model switches for this session
+        switches = 0
+        band_dist = {}
+        try:
+            conn = tel_mod.init_db(db_path)
+            cur2 = conn.execute(
+                'SELECT target, band FROM decisions '
+                'WHERE session_id = ? ORDER BY id ASC', (str(sid),))
+            chron = cur2.fetchall()
+            conn.close()
+            prev = None
+            for row in chron:
+                band = row['band'] or 'unknown'
+                band_dist[band] = band_dist.get(band, 0) + 1
+                target = row['target'] or ''
+                if not target:
+                    continue
+                if prev is not None and target != prev:
+                    switches += 1
+                prev = target
+        except Exception:
+            pass
+        
+        sessions.append({
+            'session_id': sid,
+            'decisions': cnt,
+            'fallbacks': fallbacks,
+            'fallback_rate': fallbacks / cnt if cnt > 0 else 0,
+            'model_switches': switches,
+            'band_dist': band_dist,
+        })
+    
+    return {'sessions': sessions}
+
+
+def shadow_mode_stats(db_path: Path, limit: int = 200) -> dict:
+    """Shadow mode: actual vs predicted preset decisions."""
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f'db not found: {db_path}')
+        conn = tel_mod.init_db(db_path)
+        cur = conn.execute(
+            'SELECT ts, target, shadow_target, band, reason '
+            'FROM decisions WHERE shadow_target IS NOT NULL '
+            'ORDER BY id DESC LIMIT ?', (int(limit),))
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    shadow = []
+    matches = 0
+    for r in rows:
+        actual = r['target'] or 'KEEP-MODEL'
+        predicted = r['shadow_target']
+        match = actual == predicted
+        if match:
+            matches += 1
+        shadow.append({
+            'ts': r['ts'],
+            'actual': actual,
+            'predicted': predicted,
+            'match': match,
+            'band': r['band'],
+            'reason': r['reason'],
+        })
+    
+    total = len(shadow)
+    return {
+        'shadow': shadow,
+        'total': total,
+        'matches': matches,
+        'match_rate': matches / total if total > 0 else 0,
+    }

@@ -38,14 +38,31 @@
     <div class="jev-chips" role="group" aria-label="Excluded providers">Loading…</div>
     <div class="jev-status" aria-live="polite"></div>
   </section>
+
+  <section class="jev-card">
+    <div class="jev-card-head">
+      <button type="button" class="jev-collapse-btn"
+              aria-expanded="false"
+              aria-controls="jev-presets-body"
+              title="Toggle model presets">
+        <h2 class="jev-card-title">Model presets</h2>
+        <span class="jev-chevron"></span>
+      </button>
+    </div>
+    <div id="jev-presets-body" class="jev-presets-body">
+      <div class="jev-preset-hint">Define each model in plain text — Jev reads your words to pick the best fit.</div>
+      <div class="jev-presets-list">Loading…</div>
+      <div class="jev-preset-status"></div>
+    </div>
+  </section>
 </div>
 
 <style>
 :root {
   --bg-panel: #ffffff;
   --bg-surface: #f9fafb;
-  --bg-primary: #2563eb;
-  --bg-primary-hover: #1d4ed8;
+  --bg-primary: #5e6ad2;
+  --bg-primary-hover: #4f5ac0;
   --bg-danger: #fee2e2;
   --bg-success: #d1fae5;
   --bg-hover: #f3f4f6;
@@ -55,26 +72,26 @@
   --text-danger: #991b1b;
   --text-success: #065f46;
   --border-panel: #e5e7eb;
-  --accent-primary: #2563eb;
+  --accent-primary: #5e6ad2;
   --jev-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-panel: #111827;
-    --bg-surface: #1f2937;
-    --bg-primary: #3b82f6;
-    --bg-primary-hover: #2563eb;
+    --bg-panel: #1e1f24;
+    --bg-surface: #252630;
+    --bg-primary: #7c7cf8;
+    --bg-primary-hover: #6b6beb;
     --bg-danger: #450a0a;
     --bg-success: #064e3b;
-    --bg-hover: #374151;
+    --bg-hover: #2d2e38;
     --text-primary: #f9fafb;
     --text-secondary: #9ca3af;
     --text-on-primary: #000000;
     --text-danger: #fecaca;
     --text-success: #a7f3d0;
     --border-panel: #374151;
-    --accent-primary: #3b82f6;
+    --accent-primary: #7c7cf8;
   }
 }
 
@@ -557,6 +574,142 @@
   color: #b45309;
 }
 
+.jev-presets-list { margin-top: 0.25rem; }
+.jev-preset-hint {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+/* Collapsible presets section */
+.jev-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  gap: 0.5rem;
+}
+.jev-collapse-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.jev-chevron {
+  display: inline-block;
+  font-size: 0.5625rem;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.jev-chevron::before { content: '▶'; }
+.jev-collapse-btn[aria-expanded="true"] .jev-chevron {
+  transform: rotate(90deg);
+}
+.jev-presets-body.collapsed {
+  display: none;
+}
+.jev-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border-panel);
+  flex-wrap: wrap;
+}
+.jev-preset-row.edited { background: var(--bg-hover); }
+.jev-preset-desc-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  resize: vertical;
+  box-sizing: border-box;
+}
+.jev-preset-desc-input:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 0;
+}
+.jev-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border-panel);
+}
+.jev-preset-row:last-child { border-bottom: none; }
+.jev-preset-name {
+  font-family: var(--jev-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jev-preset-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jev-preset-badge {
+  flex-shrink: 0;
+  font-size: 0.5625rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.jev-preset-badge.jev-preset-vision { background: var(--bg-success); color: var(--text-success); }
+.jev-preset-row .jev-btn-sm { flex-shrink: 0; }
+.jev-pf-label { display: grid; gap: 0.15rem; font-size: 0.625rem; color: var(--text-secondary); }
+.jev-pf-label.jev-pf-check { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+.jev-pf-label input[type=text],
+.jev-pf-label input[type=number],
+.jev-pf-label textarea {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  width: 100%;
+  box-sizing: border-box;
+}
+.jev-pf-label input[type=range] { width: 100%; accent-color: var(--accent-primary); }
+.jev-pf-label input:focus-visible,
+.jev-pf-label textarea:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 0;
+}
+.jev-pf-nums { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.jev-pf-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.jev-pf-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.4rem; }
+.jev-pf-err { font-size: 0.625rem; color: var(--text-danger); min-height: 0.9rem; }
+.jev-pf-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+.jev-pf-counter { font-variant-numeric: tabular-nums; }
+.jev-pf-counter.over { color: var(--text-danger); font-weight: 700; }
+@container (max-width: 320px) {
+  .jev-pf-row2, .jev-pf-row3 { grid-template-columns: 1fr; }
+}
+
 </style>
 
 <script type="module">
@@ -564,6 +717,7 @@ import { callJsonApi } from '/js/api.js';
 
 const CHIPS_KEY = 'jev_panel_chips';
 const AUTO_KEY = 'jev_panel_auto';
+const PRESETS_KEY = 'jev_router_presets_collapsed';
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -685,14 +839,113 @@ function initPanel(root) {
     if (root.__jevTimer) { clearInterval(root.__jevTimer); root.__jevTimer = null; }
   };
 
+  // --- Model presets: inline plain-text descriptions ---
+  let lastPresetsSig = '';
+  let saveBusy = false;
+
+  const loadPresets = async () => {
+    try {
+      const r = await callJsonApi('plugins/jev_router/routing_presets', { action: 'list' });
+      const presets = (r && r.ok && r.presets) ? r.presets : [];
+      const sig = JSON.stringify(presets);
+      if (sig !== lastPresetsSig) {
+        lastPresetsSig = sig;
+        renderPresets(presets);
+      }
+    } catch (e) {
+      q('.jev-presets-list').textContent = 'load error';
+    }
+  };
+
+  const saveDescription = async (name, inputEl, rowEl) => {
+    if (saveBusy) return;
+    const desc = inputEl.value;
+    const status = q('.jev-preset-status');
+    if (desc.length > 300) {
+      status.textContent = name + ': too long (' + desc.length + '/300)';
+      return;
+    }
+    if (!desc.trim()) {
+      status.textContent = name + ': description cannot be empty';
+      return;
+    }
+    saveBusy = true;
+    status.textContent = 'saving ' + name + '…';
+    try {
+      const r = await callJsonApi('plugins/jev_router/routing_presets', {
+        action: 'describe', name: name, description: desc
+      });
+      if (r.ok) {
+        status.textContent = name + ': saved ✓';
+        rowEl.classList.remove('edited');
+        setTimeout(() => { status.textContent = ''; }, 2000);
+      } else {
+        status.textContent = name + ': ' + (r.error || 'save failed');
+      }
+    } catch (e) {
+      status.textContent = name + ': network error';
+    }
+    saveBusy = false;
+  };
+
+  const renderPresets = (presets) => {
+    const box = q('.jev-presets-list');
+    box.textContent = '';
+    if (!presets.length) {
+      box.appendChild(el('div', 'jev-empty', 'no model presets found'));
+      return;
+    }
+    presets.forEach(p => {
+      const row = el('div', 'jev-preset-row');
+      row.appendChild(el('span', 'jev-preset-name', p.name));
+      
+      // Inline plain-text description editor
+      const input = el('textarea', 'jev-preset-desc-input', '');
+      input.value = p.description || '';
+      input.placeholder = 'Plain-text definition, e.g. "GPT-6.1 Sol is a proprietary reasoning model supporting text and image inputs, text output, and a 1M-token context window. It delivers 52.1 tokens/s, with input/output pricing of $2/$10 per million tokens. Its Intelligence Index score is 52."';
+      input.rows = 2;
+      input.maxLength = 300;
+      input.oninput = () => {
+        const changed = input.value !== (p.description || '');
+        row.classList.toggle('edited', changed);
+        const counter = row.querySelector('.jev-pf-counter');
+        if (counter) {
+          counter.textContent = input.value.length + '/300';
+          counter.classList.toggle('over', input.value.length > 300);
+        }
+      };
+      row.appendChild(input);
+      
+      const counter = el('span', 'jev-pf-counter', (p.description || '').length + '/300');
+      row.appendChild(counter);
+      
+      const saveBtn = el('button', 'jev-btn btn-primary jev-btn-sm jev-preset-save', 'Save');
+      saveBtn.type = 'button';
+      saveBtn.onclick = () => saveDescription(p.name, input, row);
+      saveBtn.onkeydown = (ev) => {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          saveDescription(p.name, input, row);
+        }
+      };
+      row.appendChild(saveBtn);
+      box.appendChild(row);
+    });
+  };
+
+  // Single applyAuto with focus guard (defined before bindings)
   const applyAuto = () => {
     const on = q('.jev-auto-toggle').checked;
     stopAuto();
     if (on) {
       root.__jevTimer = setInterval(() => {
         if (!document.body.contains(root)) { stopAuto(); return; }
+        // Skip refresh if a description input is focused
+        if (document.activeElement && document.activeElement.classList
+            && document.activeElement.classList.contains('jev-preset-desc-input')) return;
         refresh();
         loadTuning();
+        loadPresets();
       }, 20000);
     }
     try { localStorage.setItem(AUTO_KEY, on ? '1' : '0'); } catch (e) {}
@@ -706,6 +959,34 @@ function initPanel(root) {
   } catch (e) {}
   applyChips();
   applyAuto();
+
+  // --- Collapsible Model Presets ---
+  let presetsOpen = false; // default collapsed
+  const collapseBtn = q('.jev-collapse-btn');
+  const presetsBody = q('.jev-presets-body');
+  try {
+    const stored = localStorage.getItem(PRESETS_KEY);
+    if (stored !== null) presetsOpen = stored === '1';
+  } catch (e) {}
+  const applyPresetsCollapse = () => {
+    collapseBtn.setAttribute('aria-expanded', presetsOpen ? 'true' : 'false');
+    presetsBody.classList.toggle('collapsed', !presetsOpen);
+    try { localStorage.setItem(PRESETS_KEY, presetsOpen ? '1' : '0'); } catch (e) {}
+  };
+  collapseBtn.onclick = () => {
+    presetsOpen = !presetsOpen;
+    applyPresetsCollapse();
+  };
+  collapseBtn.onkeydown = (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      collapseBtn.onclick();
+    }
+  };
+  applyPresetsCollapse();
+
+  // Initial load
+  loadPresets();
 
   // --- Band Tuning ---
   let tuneOrders = null;

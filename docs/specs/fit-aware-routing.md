@@ -89,3 +89,20 @@ TDD per slice: signals parse/validation, policy fit rules + fallback equivalence
 ## Open questions
 
 None - resolved autonomously per goal authorization and recorded as D1-D5.
+
+## Local Model Considerations
+
+### Cold-Start Fallback Latency
+
+- Local model presets (e.g., `Local 27B Uncensored` with `lm_studio` provider) may require model loading from a cold start when not already in memory.
+- Fallback chains that include local models will experience additional latency on first use after the model is unloaded.
+- The circuit breaker (`breaker_threshold`, `breaker_cooldown_hours` in `config.json`) helps by temporarily excluding consistently failing local endpoints, but cold-start delays on healthy endpoints are not captured by the breaker.
+- Operators should be aware that `LOCAL 27b`-class presets may add tens of seconds on first request after idle periods.
+
+### Context Window Limitations & Subagent Delegation
+
+- Local model presets have constrained context windows (e.g., `Local 27B Uncensored` chat `ctx_length: 56000`, utility `ctx_length: 27000`).
+- When a task exceeds the active preset's context window, the `Tiny Local` agent profile is the designated fallback for local models with small context windows.
+- Subagent delegation (`call_subordinate` with `profile: "tiny-local"`) preserves workflow continuity by offloading context-heavy portions to a profile optimized for small-window local inference.
+- The `agent_profile` signal (passed to Jev via `build_state`) allows fit-aware routing to observe the active profile and record `profile_match`, making context-window pressure visible in telemetry.
+- Routing does not automatically switch profiles; `dynamic_switch` remains opt-in. The `Tiny Local` profile should be explicitly selected by the user or via chat mention (`use tiny local`) when context limits are anticipated.

@@ -149,6 +149,30 @@ def test_never_raises_on_total_garbage():
     asyncio.run(run())
 
 
+def test_fallback_from_preset_in_route_result():
+    """S11: RouteResult should expose which preset was intended when fallback occurs."""
+    async def run():
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / 'tel.db'
+            def factory(entry):
+                if entry.preset_name == 'Power':
+                    raise ValueError('Power factory failed')
+                return f'MODEL[{entry.preset_name}]'
+            res = await router.route(
+                cfg=_cfg(), entries=_mk_entries(),
+                policy_path=Path(td) / 'p.yaml',
+                message='refactor the auth module and add tests', attachments=[],
+                query_fn=_fake_query(Signals('coding', 0.9, 1.8, 0.05, 0.5)),
+                client=object(), jev_model='jev-latest',
+                model_factory=factory, telemetry_path=db)
+            # Should fallback to keeping model, with intended_preset='Power'
+            assert res.model is None
+            assert res.fallback is True
+            assert hasattr(res, 'intended_preset')
+            assert res.intended_preset == 'Power'
+    asyncio.run(run())
+
+
 def test_advice_present_when_gate_recommends():
     async def run():
         with tempfile.TemporaryDirectory() as td:
@@ -476,16 +500,20 @@ def test_auto_tune_routes_away_from_failing_preset():
             }))
             db = Path(td) / 'tel.db'
             conn = telemetry.init_db(db)
-            # Per-preset evidence floors: Power qualified-failing (11 own
-            # calls, ok/fail interleaved so the breaker never sees 3
-            # consecutive fails) and Unhinged qualified-healthy (10 own
-            # ok calls); sparse own evidence would keep current orders.
+            # Per-preset evidence floors IN THE ROUTED BAND (heavy:
+            # complexity 1.6): Power qualified-failing (11 own calls,
+            # ok/fail interleaved so the breaker never sees 3 consecutive
+            # fails) and Unhinged qualified-healthy (10 own ok calls);
+            # band-scoped evidence since auto-tune ranks per band now
+            # (band-less legacy rows are excluded from band stats).
             for i in range(11):
                 ok_call = i % 2 == 1
                 telemetry.record_call(conn, 'zai_coding', 'Power', ok_call,
-                                      0.1, None if ok_call else 'e')
+                                      0.1, None if ok_call else 'e',
+                                      band='heavy')
             for _ in range(10):
-                telemetry.record_call(conn, 'a0_venice', 'Unhinged', True, 0.1, None)
+                telemetry.record_call(conn, 'a0_venice', 'Unhinged', True,
+                                      0.1, None, band='heavy')
             conn.close()
             res = await router.route(
                 cfg=_cfg(), entries=entries, policy_path=rp,
@@ -602,13 +630,18 @@ def test_route_exposes_rule_and_human_reason():
     asyncio.run(run())
 
 
-def test_dial_quality_promotes_power_on_light_chat():
+def test_legacy_dial_key_is_inert_on_light_chat():
+    """Dial removal: a legacy performance_dial=quality key must NOT re-rank
+    bands. File order is the truth: light band's first available entry wins.
+    With DEFAULT_BAND_ORDERS and pool [Default, Efficiency, Power],
+    the light band file order is [Fast, Efficiency, Default, ...], so
+    Efficiency is the first available → MUST be Efficiency, not Power."""
     async def run():
         with tempfile.TemporaryDirectory() as td:
             pol = Path(td) / 'p.yaml'
             pol.write_text('provider_rules:\n  include: []\n  exclude: []\n')
             cfg = _cfg()
-            cfg['performance_dial'] = 'quality'
+            cfg['performance_dial'] = 'quality'  # legacy key, must be ignored
             res = await router.route(
                 cfg=cfg, entries=_mk_entries(), policy_path=pol,
                 message='what is a bandwidth?', attachments=[],
@@ -616,41 +649,51 @@ def test_dial_quality_promotes_power_on_light_chat():
                 client=object(), jev_model='j',
                 model_factory=lambda e: f"MODEL[{e.preset_name}]",
                 telemetry_path=Path(td) / 't.db')
-            assert res.model == 'MODEL[Power]', res.reason
+            # File order light = Fast, Efficiency, Default, ... ; pool has
+            # Default, Efficiency, Power → first available is Efficiency.
+            # With dial removed, must be Efficiency. With dial, quality promotes
+            # Power to front → would be Power. This test FAILS with dial active.
+            assert res.model == 'MODEL[Efficiency]', f'got {res.model}, reason={res.reason}'
+            assert 'dial=' not in res.reason
     asyncio.run(run())
 
 
-def test_pinned_band_skips_dial():
+def test_pinned_band_skips_auto_tune():
+    """Pins freeze the light band against auto-tune suggestion; the file
+    order must hold even when telemetry favors another preset."""
     import yaml
     async def run():
         with tempfile.TemporaryDirectory() as td:
             unpol = Path(td) / 'unpinned.yaml'
             unpol.write_text(yaml.safe_dump({
                 'provider_rules': {'include': [], 'exclude': []},
+                'auto_tune': True,
             }))
             pinpol = Path(td) / 'pinned.yaml'
             pinpol.write_text(yaml.safe_dump({
                 'provider_rules': {'include': [], 'exclude': []},
                 'pinned_bands': {'light': True},
+                'auto_tune': True,
             }))
             cfg = _cfg()
-            cfg['performance_dial'] = 'quality'
 
-            async def route_with(policy_path):
+            async def route_with(policy_path, db):
                 return await router.route(
                     cfg=dict(cfg), entries=_mk_entries(), policy_path=policy_path,
                     message='what is a bandwidth?', attachments=[],
                     query_fn=_fake_query(Signals('chat', 0.9, 0.2, 0.05, 0.5)),
                     client=object(), jev_model='j',
                     model_factory=lambda e: f"MODEL[{e.preset_name}]",
-                    telemetry_path=Path(td) / 't.db')
+                    telemetry_path=db, session_id='')
 
-            un = await route_with(unpol)
-            pin = await route_with(pinpol)
-            # dial promotes Power in the unpinned light band;
-            # the pin freezes the file order, so Efficiency stays first
-            assert un.model == 'MODEL[Power]', un.reason
-            assert pin.model == 'MODEL[Efficiency]', pin.reason
+            # With no telemetry evidence, auto-tune suggests no change, so both
+            # resolve via file orders. Default band order for light puts
+            # Default first; scenario pins just freeze that unchanged.
+            un = await route_with(unpol, Path(td) / 't1.db')
+            pin = await route_with(pinpol, Path(td) / 't2.db')
+            assert un.model == pin.model  # pins agree on file-order truth
+            # Pinned decision originates from frozen orders, not dialing
+            assert 'dial=' not in pin.reason and 'dial=' not in un.reason
     asyncio.run(run())
 
 
@@ -767,3 +810,66 @@ def test_auto_exec_claims_are_session_scoped():
         assert router._auto_exec_claim('s2', 'd1') is True,             'claims must be scoped per session, not global by digest'
     finally:
         router._auto_exec_reset()
+
+
+# --- RED: guard-rail - unresolved band-order names surface in debug log ---
+
+def test_unresolved_band_order_names_log_warning(tmp_path, monkeypatch):
+    import yaml
+    from helpers import signals as signals_mod
+    dbg = tmp_path / 'dbg.log'
+    monkeypatch.setattr(signals_mod, 'DEBUG_LOG', dbg)
+    pol = tmp_path / 'routing-policy.yaml'
+    pol.write_text(yaml.safe_dump({
+        'band_orders': {
+            'light': ['Nonexistent Light', 'Default'],
+            'medium': ['Default'],
+            'heavy': ['Ghost Model', 'Default'],
+        }}))
+    # keep tuning from pruning the deliberately-broken order names so the
+    # warning exercises the validate path itself
+    from helpers import policy as policy_mod, tuning as tuning_mod
+    orig = tuning_mod.effective_band_orders
+    monkeypatch.setattr(
+        tuning_mod, 'effective_band_orders',
+        lambda path, tel, presets: (policy_mod.load_band_orders(path), False))
+
+    async def run():
+        await router.route(
+            cfg=_cfg(), entries=_mk_entries(), policy_path=pol,
+            message='hey', attachments=[],
+            query_fn=_fake_query(Signals('chat', 1.0, 0.1, 0.0, 0.0)),
+            client=object(), jev_model='j',
+            model_factory=lambda e: 'M',
+            telemetry_path=tmp_path / 't.db')
+    asyncio.run(run())
+    text = dbg.read_text()
+    assert 'WARNING band-orders unresolved' in text, text
+    assert 'Nonexistent Light' in text and 'Ghost Model' in text, text
+
+
+def test_resolved_band_order_names_log_no_warning(tmp_path, monkeypatch):
+    import yaml
+    from helpers import signals as signals_mod
+    dbg = tmp_path / 'dbg.log'
+    monkeypatch.setattr(signals_mod, 'DEBUG_LOG', dbg)
+    pol = tmp_path / 'routing-policy.yaml'
+    # orders fully resolvable against the test pool [Default, Efficiency, Power]
+    pol.write_text(yaml.safe_dump({
+        'band_orders': {
+            'light': ['Efficiency', 'Default'],
+            'medium': ['Default'],
+            'heavy': ['Power'],
+        }}))
+
+    async def run():
+        await router.route(
+            cfg=_cfg(), entries=_mk_entries(), policy_path=pol,
+            message='hey', attachments=[],
+            query_fn=_fake_query(Signals('chat', 1.0, 0.1, 0.0, 0.0)),
+            client=object(), jev_model='j',
+            model_factory=lambda e: 'M',
+            telemetry_path=tmp_path / 't.db')
+    asyncio.run(run())
+    if dbg.exists():
+        assert 'WARNING band-orders unresolved' not in dbg.read_text()

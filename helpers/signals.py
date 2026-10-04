@@ -82,13 +82,13 @@ def build_questions(pool_entries: list | None = None,
                 'type': 'choice',
                 'instructions': (
                     'Which available preset fits this message best? '
-                    'Consider task type, capability needs and cost tier.'),
+                    'Match the plain-text description of each preset to the '
+                    'nuance and needs of this message.'),
                 'criteria': {
-                    name: (f'provider={getattr(e, "provider", "?")}, '
-                           f'model={getattr(e, "model", "?")}, '
-                           'vision=' + (
-                               'yes' if getattr(e, 'vision', False)
-                               else 'no'))
+                    # Plain-text description is the ONLY nuance signal;
+                    # technical facts are intentionally excluded.
+                    name: (getattr(e, 'description', '').strip()
+                           or 'no description provided')
                     for name, e in options
                 },
             }
@@ -117,13 +117,19 @@ def build_state(message: str, attachments: list,
         'agent_profile': str(agent_profile or ''),
     }
     if pool_entries:
-        state['available_models'] = [
-            {'preset': e.preset_name, 'provider': e.provider,
-             'model': e.model, 'vision': bool(e.vision)}
-            for e in pool_entries
-        ]
+        available = []
+        for e in pool_entries:
+            row = {'preset': e.preset_name, 'provider': e.provider,
+                   'model': e.model, 'vision': bool(e.vision),
+                   'ctx_length': e.ctx_length}
+            desc = getattr(e, 'description', '')
+            if desc:
+                row['description'] = desc
+            available.append(row)
+        state['available_models'] = available
         state['note'] = (note + ' available_models lists the presets '
-                         'eligible for this call in real time.')
+                         'eligible for this call in real time, '
+                         'including ctx_length for context-window awareness.')
     return state
 
 

@@ -9,6 +9,7 @@ CLASS_TO_PROFILE = {
     'research': 'researcher',
     'security': 'hacker',
     'testing': 'test-engineer',
+    'context_overflow': 'tiny-local',  # for local model context window pressure
 }
 
 DEFAULT_THRESHOLD = 0.6
@@ -22,6 +23,45 @@ class GateResult:
     reason: str
     mode: str = DEFAULT_MODE
     auto_exec: bool = False
+
+
+def routing_allowed(cfg: dict | None, chat_state: dict | None) -> bool:
+    """Single source of truth for the routing kill-switch.
+
+    Truth table (spec per-chat-kill-switch):
+      global enabled=false -> False everywhere, regardless of chat state;
+      global enabled=true  -> per-chat switch decides;
+      chat state unset     -> follows the global flag;
+      chat enabled=false   -> False for that chat only.
+
+    Non-dict inputs are treated as unset; never raises.
+    """
+    try:
+        # None/unavailable cfg behaves like an empty dict: defaults enabled.
+        if isinstance(cfg, dict) and not cfg.get('enabled', True):
+            return False
+        if isinstance(chat_state, dict) and 'enabled' in chat_state:
+            return bool(chat_state.get('enabled'))
+        return True
+    except Exception:
+        return False
+
+
+JEV_KILL_KEY = 'jev_router_kill'
+
+
+def routing_allowed_agent(agent, cfg: dict | None) -> bool:
+    """routing_allowed() for hooks: reads the per-chat switch from context.
+
+    Uses recursive get_data so subagent contexts inherit the parent chat's
+    kill state. Any failure falls back to the global flag alone.
+    """
+    try:
+        context = getattr(agent, 'context', None)
+        chat_state = context.get_data(JEV_KILL_KEY) if context else None
+    except Exception:
+        chat_state = None
+    return routing_allowed(cfg, chat_state)
 
 
 def evaluate(sig: Signals | None, cfg: dict) -> GateResult:

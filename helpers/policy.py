@@ -21,6 +21,65 @@ BANDS = ('light', 'medium', 'heavy')
 VISION_THRESHOLD = 0.5
 
 
+def _norm(name) -> str:
+    """Normalize a preset name for matching: lowercase, alphanumerics only."""
+    if not isinstance(name, str):
+        return ''
+    return ''.join(c for c in name.lower() if c.isalnum())
+
+
+# Human renames of first-class presets break band-order lookups silently.
+# Normalized-name aliases keep routing dynamic when users rename
+# 'Efficiency' -> 'Efficient' or 'Power' -> 'High Power'. Direct normalized
+# matches always win; aliases are only consulted otherwise.
+BAND_NAME_ALIASES = {
+    'fast': ['efficient', 'efficiency'],
+    'efficiency': ['efficient', 'fast'],
+    'efficient': ['efficiency', 'fast'],
+    'power': ['highpower'],
+    'highpower': ['power'],
+}
+
+
+def _match_entry(name: str, by_norm: dict):
+    """Find a pool entry for a band-order name via normalization + aliases."""
+    norm = _norm(name)
+    if not norm:
+        return None
+    entry = by_norm.get(norm)
+    if entry is not None:
+        return entry
+    for alias in BAND_NAME_ALIASES.get(norm, []):
+        entry = by_norm.get(alias)
+        if entry is not None:
+            return entry
+    return None
+
+
+def validate_band_orders(orders: dict, entry_names: list) -> dict:
+    """Band -> order names matching no live preset (direct or alias).
+
+    Returns {} when every name in every band resolves. Surfacing this in
+    logs/panels turns silent fallthrough-to-Default into a visible warning.
+    """
+    have = set()
+    for n in entry_names or []:
+        have.add(_norm(n))
+    missing = {}
+    for band, names in (orders or {}).items():
+        bad = []
+        for name in names or []:
+            norm = _norm(name)
+            if not norm or norm in have:
+                continue
+            if any(a in have for a in BAND_NAME_ALIASES.get(norm, [])):
+                continue
+            bad.append(name)
+        if bad:
+            missing[band] = bad
+    return missing
+
+
 @dataclass
 class Decision:
     entry: PoolEntry | None
@@ -93,6 +152,9 @@ def resolve(sig: Signals, entries: list[PoolEntry],
             reason_human='No eligible model presets available; '
                          'keeping the active preset model')
     by_preset = {e.preset_name: e for e in entries}
+    by_norm = {}
+    for e in entries:
+        by_norm.setdefault(_norm(e.preset_name), e)
     orders = band_orders or DEFAULT_BAND_ORDERS
     wanted = orders.get(band) or DEFAULT_BAND_ORDERS[band]
     vision_hard = sig.vision_needed > VISION_THRESHOLD
@@ -106,9 +168,10 @@ def resolve(sig: Signals, entries: list[PoolEntry],
                 fit_min_confidence)
         except (TypeError, ValueError):
             confident = False
-        fit_entry = by_preset.get(sig.preset_fit)
+        fit_entry = _match_entry(sig.preset_fit, by_norm)
         if (confident and fit_entry is not None
-                and sig.preset_fit in wanted
+                and any(_match_entry(n, by_norm) is fit_entry
+                        for n in wanted)
                 and not (vision_hard and not fit_entry.vision)):
             chosen = (f'preset {fit_entry.preset_name} '
                       f'({fit_entry.provider}/{fit_entry.model})')
@@ -124,7 +187,7 @@ def resolve(sig: Signals, entries: list[PoolEntry],
     deviated_missing = False
     deviated_vision = False
     for name in wanted:
-        entry = by_preset.get(name)
+        entry = _match_entry(name, by_norm)
         if entry is None:
             deviated_missing = True
             continue

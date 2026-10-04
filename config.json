@@ -7,7 +7,6 @@
   "chat_preselect": true,
   "fit_enabled": true,
   "fit_min_confidence": 0.6,
-  "performance_dial": "balanced",
   "dynamic_switch_enabled": false,
   "dynamic_switch_threshold": 0.7,
   "dynamic_switch_consecutive": 2,
@@ -17,5 +16,8 @@
   "jev_model": "jev-latest",
   "jev_timeout": 30,
   "breaker_threshold": 3,
-  "breaker_cooldown_hours": 1.0
+  "breaker_cooldown_hours": 1.0,
+  "obs_fallback_enabled": true,
+  "obs_session_enabled": true,
+  "obs_shadow_enabled": true
 }

@@ -33,23 +33,40 @@ MIN_EVIDENCE_CALLS = 10
 
 
 def suggest_band_orders(current: dict, pool_presets: list,
-                        preset_stats: dict) -> dict:
-    """Suggest band orders from per-preset outcome stats.
+                        preset_stats: dict,
+                        band_preset_stats: dict | None = None) -> dict:
+    """Suggest band orders from per-band outcome stats (global mode opt-in).
 
-    Per-preset evidence floor: a preset needs at least
-    MIN_EVIDENCE_CALLS own ok+fail observations to be ranked at all.
+    Two modes:
+    - band_preset_stats is a dict (even empty {}): BAND MODE. Each band is
+      qualified/ranked ONLY from its own band's stats; a band with no own
+      evidence keeps the user's file order. Never re-ranks from global
+      stats - that was the Default-everywhere flattening regression
+      (global health headed every band regardless of band semantics).
+    - band_preset_stats omitted (None): GLOBAL MODE. Legacy callers pass
+      aggregate preset_stats and every band ranks from them.
+
+    Per-band evidence: when band_preset_stats provides data for a band,
+    qualification and ranking use ONLY that band's stats, so a preset
+    that succeeds on light calls can head the light band while another
+    heads heavy - no global flattening (production: Default with the most
+    global ok calls headed every band).
+
+    Per-band evidence floor: a preset needs at least MIN_EVIDENCE_CALLS
+    own ok+fail observations IN THAT BAND to be ranked at all.
     Qualified presets rank healthy-first (most ok first), failing-last
     (fewest failures first); unqualified presets - no or sparse own
     evidence - keep their current relative order after the qualified
-    group, so one healthy call can never promote a preset over the
-    user's configured orders (production: Default with ok=1 jumped to
-    #1 in every band). Presets
-    absent from the live pool are dropped; unknown pool presets are
-    appended. Missing bands fall back to DEFAULT_BAND_ORDERS. Pure and
-    total: never raises, covers all bands.
+    group. Presets absent from the live pool are dropped; unknown pool
+    presets are appended. Missing bands fall back to DEFAULT_BAND_ORDERS.
+    Pure and total: never raises, covers all bands.
     """
     pool = [str(p) for p in (pool_presets or [])]
     stats = preset_stats if isinstance(preset_stats, dict) else {}
+    # None = global mode (omitted kwarg); dict (even {}) = band mode.
+    # Do NOT coerce None here - that would make global mode unreachable.
+    band_stats = band_preset_stats if isinstance(band_preset_stats, dict) \
+        else None
     cur_raw = current if isinstance(current, dict) else {}
     defaults = {b: list(names) for b, names in DEFAULT_BAND_ORDERS.items()}
     out = {}
@@ -62,16 +79,32 @@ def suggest_band_orders(current: dict, pool_presets: list,
             if p not in order:
                 order.append(p)
 
-        def qualified(p):
-            s = stats.get(p) if isinstance(stats.get(p), dict) else {}
+        # Band-mode contract: a band with no own evidence keeps the user's
+        # file order. Falling back to GLOBAL stats here would re-rank every
+        # band from aggregate health (the Default-everywhere flattening the
+        # per-band feature exists to remove). Only when band_stats is None
+        # (caller explicitly wants global ranking) does global apply.
+        if band_stats is not None:
+            bdata = band_stats.get(band)
+            eff = bdata if isinstance(bdata, dict) and bdata else None
+        else:
+            eff = stats
+        if eff is None:
+            # no measured evidence in this band: preserve relative file order
+            # (unqualified split still applies - everything is unqualified)
+            out[band] = list(order)
+            continue
+
+        def qualified(p, eff=eff):
+            s = eff.get(p) if isinstance(eff.get(p), dict) else {}
             try:
                 n = int(s.get('ok') or 0) + int(s.get('fail') or 0)
             except Exception:
                 n = 0
             return n >= MIN_EVIDENCE_CALLS
 
-        def key(p):
-            s = stats.get(p) if isinstance(stats.get(p), dict) else {}
+        def key(p, eff=eff, order=order):
+            s = eff.get(p) if isinstance(eff.get(p), dict) else {}
             try:
                 fail = int(s.get('fail') or 0)
             except Exception:
@@ -224,6 +257,7 @@ def effective_band_orders(policy_path, telemetry_path=None,
         if not read_auto_tune(policy_path):
             return orders, False
         stats = {}
+        band_stats = None
         if telemetry_path is not None:
             from . import telemetry as tel_mod
             tp = Path(telemetry_path)
@@ -231,10 +265,18 @@ def effective_band_orders(policy_path, telemetry_path=None,
                 conn = tel_mod.init_db(tp)
                 try:
                     stats = tel_mod.preset_call_stats(conn, limit=limit)
+                    band_stats = tel_mod.band_preset_call_stats(conn,
+                                                                limit=limit)
                 finally:
                     conn.close()
+        # Band-mode ALWAYS when a telemetry DB was opened - even an empty
+        # band_stats ({}: no banded rows yet) must keep file orders, never
+        # degrade to global ranking (that was the Default-everywhere bug).
+        # Global mode only when the kwarg is omitted (band_stats stays None
+        # because no telemetry path was provided).
         suggested = suggest_band_orders(
-            orders, list(pool_presets or []), stats)
+            orders, list(pool_presets or []), stats,
+            band_preset_stats=band_stats)
         pins = read_pinned_bands(policy_path)
         for band, pin in pins.items():
             if pin and band in suggested:

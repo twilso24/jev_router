@@ -81,8 +81,9 @@ def test_build_state_includes_pool_snapshot():
     snap = state['available_models']
     assert len(snap) == 2
     assert snap[0] == {'preset': 'Power', 'provider': 'zai_coding',
-                       'model': 'glm-5.3', 'vision': False}
+                       'model': 'glm-5.3', 'vision': False, 'ctx_length': None}
     assert snap[1]['vision'] is True
+    assert 'ctx_length' in snap[1]
 
 
 def test_build_state_without_pool_omits_snapshot():
@@ -222,8 +223,10 @@ def test_non_timeout_error_is_not_retried():
 def _entries():
     from helpers.pool import PoolEntry
     return [
-        PoolEntry('Fast', 'chat', 'openrouter', 'm1', vision=False),
-        PoolEntry('Story', 'chat', 'a0_venice', 'aion', vision=True),
+        PoolEntry('Fast', 'chat', 'openrouter', 'm1', vision=False,
+                  description='Very fast model that is not very smart'),
+        PoolEntry('Story', 'chat', 'a0_venice', 'aion', vision=True,
+                  description='Local model best for private inference'),
     ]
 
 
@@ -247,8 +250,12 @@ def test_build_questions_pool_adds_preset_fit_choice():
     fit = q.get('preset_fit')
     assert fit and fit['type'] == 'choice'
     assert set(fit['criteria']) == {'Fast', 'Story'}
-    assert 'a0_venice' in fit['criteria']['Story']
-    assert 'vision' in fit['criteria']['Story']
+    # NEW contract: criteria = plain-text description ONLY, verbatim.
+    # Equality already pins the full text, so technical facts cannot leak.
+    # (Substring checks are deliberately avoided: descriptions may contain
+    # words like 'model' or 'vision' naturally.)
+    assert fit['criteria']['Fast'] == 'Very fast model that is not very smart'
+    assert fit['criteria']['Story'] == 'Local model best for private inference'
 
 
 def test_build_questions_single_preset_skips_fit():

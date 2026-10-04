@@ -81,21 +81,24 @@ def _make_model_factory(ext=None):
     return factory
 
 
-def _instrument(ext, model, entry):
+def _instrument(ext, model, entry, fallback_from_preset: str | None = None,
+                band: str | None = None):
     # Track real API-call outcomes: breaker feedback + tuning telemetry.
     try:
         from usr.plugins.jev_router.helpers import call_tracker
 
-        def on_outcome(provider, preset, ok, duration, error):
-            _on_call_outcome(ext, provider, preset, ok, duration, error)
+        def on_outcome(provider, preset, ok, duration, error, usage=None, fallback=None):
+            _on_call_outcome(ext, provider, preset, ok, duration, error, fallback,
+                             band=band)
 
         call_tracker.instrument(
-            model, entry.provider, entry.preset_name, on_outcome)
+            model, entry.provider, entry.preset_name, on_outcome,
+            fallback_from_preset=fallback_from_preset)
     except Exception as exc:
         _dbg('instrument failed: ' + str(exc))
 
 
-def _instrument_kept_model(ext, model):
+def _instrument_kept_model(ext, model, fallback_from_preset: str | None = None):
     # Keep-model fallback: the framework's cached model still serves the
     # turn, so its real outcomes must reach telemetry + breaker too.
     # Attribution comes from the framework model config; without a provider
@@ -114,15 +117,18 @@ def _instrument_kept_model(ext, model):
             return
         name = str(getattr(conf, 'name', '') or provider)
 
-        def on_outcome(prov, preset, ok, duration, error):
-            _on_call_outcome(ext, prov, preset, ok, duration, error)
+        def on_outcome(prov, preset, ok, duration, error, usage=None, fallback=None):
+            _on_call_outcome(ext, prov, preset, ok, duration, error, fallback)
 
-        call_tracker.instrument(model, provider, name, on_outcome)
+        call_tracker.instrument(model, provider, name, on_outcome,
+                                fallback_from_preset=fallback_from_preset)
     except Exception as exc:
         _dbg('kept-model instrument failed: ' + str(exc))
 
 
-def _on_call_outcome(ext, provider, preset, ok, duration, error):
+def _on_call_outcome(ext, provider, preset, ok, duration, error,
+                     fallback_from_preset: str | None = None,
+                     band: str | None = None):
     # breaker feedback from real outcomes (config thresholds)
     try:
         from usr.plugins.jev_router.helpers import circuit_breaker as cb_mod
@@ -147,7 +153,9 @@ def _on_call_outcome(ext, provider, preset, ok, duration, error):
         if ext is not None:
             from usr.plugins.jev_router.helpers import telemetry as tel_mod
             conn = tel_mod.init_db(ext._telemetry_path())
-            tel_mod.record_call(conn, provider, preset, ok, duration, error)
+            tel_mod.record_call(conn, provider, preset, ok, duration, error,
+                                fallback_from_preset=fallback_from_preset,
+                                band=band)
             conn.close()
     except Exception:
         pass
@@ -168,9 +176,10 @@ class JevRouteChatCall(Extension):
         try:
             cfg = _plugin_cfg(self.agent)
             _dbg(f'cfg keys={sorted(cfg.keys())}')
-            if not cfg.get('enabled', True):
-                _dbg('early return: explicit opt-out')
-                return  # explicit opt-out only; framework toggle is the master switch
+            from usr.plugins.jev_router.helpers.gate import routing_allowed_agent
+            if not routing_allowed_agent(self.agent, cfg):
+                _dbg('early return: routing disabled (global or per-chat)')
+                return  # global off OR per-chat off → no routing
             if not _has_api_key(cfg):
                 _dbg('early return: no TypeSafe API key configured; keeping framework model')
                 return  # never build a keyless Jev client; skip routing entirely
@@ -187,20 +196,22 @@ class JevRouteChatCall(Extension):
 
             entries = _pool_entries()
             fingerprint = pool_mod.pool_fingerprint(entries)
-            # Auto-wire: keep band orders in sync with the live pool, once
-            # per pool change (fingerprint guard). Sync failures never
-            # affect routing.
+            # Auto-wire: re-sync band orders with the live pool on every
+            # chat-model call. The sync itself only writes on real changes
+            # (adds/prunes), retries are cheap, and running every turn heals
+            # hand-edited or externally modified band orders that a pool
+            # fingerprint guard would miss. Sync failures never affect
+            # routing.
+            try:
+                from usr.plugins.jev_router.helpers import auto_wire
+                auto_wire.sync_band_orders(
+                    PLUGIN_ROOT / 'routing-policy.yaml',
+                    [e.preset_name for e in entries],
+                    PLUGIN_ROOT / 'wire-state.json')
+            except Exception as exc:
+                _dbg('auto-wire sync failed: ' + str(exc))
             global _LAST_WIRE_FP
-            if fingerprint != _LAST_WIRE_FP:
-                try:
-                    from usr.plugins.jev_router.helpers import auto_wire
-                    auto_wire.sync_band_orders(
-                        PLUGIN_ROOT / 'routing-policy.yaml',
-                        [e.preset_name for e in entries],
-                        PLUGIN_ROOT / 'wire-state.json')
-                except Exception as exc:
-                    _dbg('auto-wire sync failed: ' + str(exc))
-                _LAST_WIRE_FP = fingerprint
+            _LAST_WIRE_FP = fingerprint
             _ctx = getattr(self, 'agent', None)
             session_id = str(
                 getattr(getattr(_ctx, 'context', None), 'id', '')
@@ -221,6 +232,11 @@ class JevRouteChatCall(Extension):
 
             advice_pending = {'text': None}
 
+            # Read observability settings from plugin config
+            obs_fallback = cfg.get('obs_fallback_enabled', True)
+            obs_session = cfg.get('obs_session_enabled', True)
+            obs_shadow = cfg.get('obs_shadow_enabled', True)
+
             attachments = ['image'] if msg_mod.has_image_parts(msgs) else []
             result = await router_mod.route(
                 cfg=cfg,
@@ -235,10 +251,14 @@ class JevRouteChatCall(Extension):
                 telemetry_path=self._telemetry_path(),
                 session_id=session_id,
                 agent_profile=agent_profile,
+                obs_fallback=obs_fallback,
+                obs_session=obs_session,
+                obs_shadow=obs_shadow,
             )
 
             advice_pending['text'] = getattr(result, 'advice', None)
             _dbg(f'routed fallback={result.fallback} reason={result.reason[:80]}')
+            fallback_preset = getattr(result, 'intended_preset', None)
             if result.model is not None:
                 call_data['model'] = result.model
                 # Cache successful judgments only: fallbacks (Jev failure,
@@ -246,10 +266,19 @@ class JevRouteChatCall(Extension):
                 if len(DECISION_CACHE) >= DECISION_CACHE_MAX:
                     DECISION_CACHE.pop(next(iter(DECISION_CACHE)))
                 DECISION_CACHE[cache_key] = (result.model, result.reason)
+                # Refresh attribution on the routed model when the router
+                # exposes the entry (the model factory already instruments
+                # models it creates; this covers externally provided models).
+                _entry = getattr(result, 'entry', None)
+                if _entry is not None:
+                    _instrument(self, result.model, _entry,
+                                fallback_from_preset=fallback_preset,
+                                band=getattr(result, 'band', None))
             else:
                 # keep-model fallback: still track the framework model's
                 # real outcomes (telemetry + breaker feedback)
-                _instrument_kept_model(self, call_data.get('model'))
+                _instrument_kept_model(self, call_data.get('model'),
+                                      fallback_from_preset=fallback_preset)
 
             if advice_pending['text']:
                 try:

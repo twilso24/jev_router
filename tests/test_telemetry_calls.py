@@ -279,3 +279,83 @@ def test_provider_call_stats_last_ok_latest_outcome_wins():
     assert (stats['down']['ok'], stats['down']['fail']) == (1, 1)
     assert stats['down']['last_ok'] is False, \
         'latest outcome is a failure -> still failing'
+
+
+# --- S1 per-band telemetry (RED): band column + per-band aggregation ---
+
+
+def test_calls_band_column_exists_after_init(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    cols = {r['name'] for r in conn.execute('PRAGMA table_info(calls)')}
+    assert 'band' in cols
+    conn.close()
+
+
+def test_calls_band_column_migrates_legacy_db(tmp_path):
+    db = tmp_path / 't.db'
+    conn = sqlite3.connect(db)
+    conn.execute(
+        'CREATE TABLE calls (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,'
+        ' provider TEXT NOT NULL, preset TEXT NOT NULL, ok INTEGER NOT NULL,'
+        ' duration REAL NOT NULL DEFAULT 0, error TEXT)')
+    conn.commit(); conn.close()
+    conn = telemetry.init_db(db)  # migration adds band idempotently
+    cols = {r['name'] for r in conn.execute('PRAGMA table_info(calls)')}
+    assert 'band' in cols
+    conn.close()
+
+
+def test_record_call_persists_band(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    telemetry.record_call(conn, 'p', 'Fast', True, 0.1, None, band='light')
+    telemetry.record_call(conn, 'p', 'Fast', False, 0.2, 'x', band='heavy')
+    rows = conn.execute(
+        'SELECT band, ok FROM calls ORDER BY id').fetchall()
+    assert [r['band'] for r in rows] == ['light', 'heavy']
+    conn.close()
+
+
+def test_record_call_without_band_writes_null(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    telemetry.record_call(conn, 'p', 'Fast', True, 0.1, None)
+    band = conn.execute('SELECT band FROM calls').fetchone()['band']
+    assert band is None
+    conn.close()
+
+
+def test_band_preset_call_stats_per_band(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    for _ in range(10):
+        telemetry.record_call(conn, 'p', 'Fast', True, 0.1, None, band='light')
+    for _ in range(3):
+        telemetry.record_call(conn, 'p', 'Power', False, 0.1, 'e', band='light')
+    for _ in range(10):
+        telemetry.record_call(conn, 'p', 'Power', True, 0.1, None, band='heavy')
+    stats = telemetry.band_preset_call_stats(conn, limit=50)
+    assert stats['light'] == {'Fast': {'ok': 10, 'fail': 0},
+                              'Power': {'ok': 0, 'fail': 3}}
+    assert stats['heavy'] == {'Power': {'ok': 10, 'fail': 0}}
+    assert 'medium' not in stats
+    conn.close()
+
+
+def test_band_preset_call_stats_excludes_null_band_rows(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    for _ in range(20):
+        telemetry.record_call(conn, 'p', 'Legacy', True, 0.1, None)  # band=NULL
+    stats = telemetry.band_preset_call_stats(conn, limit=200)
+    assert stats == {}, stats
+    # global stats still count the legacy rows (backward compat)
+    assert telemetry.preset_call_stats(conn, limit=200)['Legacy']['ok'] == 20
+    conn.close()
+
+
+def test_band_preset_call_stats_limit_is_newest_first(tmp_path):
+    conn = telemetry.init_db(tmp_path / 't.db')
+    for _ in range(3):
+        telemetry.record_call(conn, 'p', 'Old', True, 0.1, None, band='light')
+    telemetry.record_call(conn, 'p', 'New', False, 0.1, 'x', band='light')
+    stats = telemetry.band_preset_call_stats(conn, limit=1)
+    assert 'Old' not in stats['light']
+    assert stats['light']['New'] == {'ok': 0, 'fail': 1}
+    conn.close()

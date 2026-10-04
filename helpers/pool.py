@@ -14,6 +14,9 @@ class PoolEntry:
     api_base: str = ''
     ctx_length: int | None = None
     vision: bool = False
+    # Optional plain-language note the user writes in presets.yaml; flows
+    # into Jev's preset_fit question so it can judge nuance, not just names.
+    description: str = ''
 
 
 @dataclass
@@ -54,6 +57,7 @@ def load_pool(path: Path) -> Pool:
                 api_base=str(cfg.get('api_base') or ''),
                 ctx_length=cfg.get('ctx_length'),
                 vision=bool(cfg.get('vision', False)),
+                description=str(item.get('description') or '').strip(),
             ))
     return pool
 

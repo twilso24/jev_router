@@ -53,21 +53,25 @@ def test_config_json_has_fit_defaults():
     assert isinstance(data.get('fit_enabled'), bool)
     assert 0 < float(data.get('fit_min_confidence')) <= 1
 
-def test_config_json_has_dial_default():
+def test_config_json_has_no_dial_key():
+    """Dial removal: legacy performance_dial key must not ship in config.json."""
     data = json.loads(_read(PLUGIN_ROOT / 'config.json'))
-    assert data.get('performance_dial') == 'balanced'
+    assert 'performance_dial' not in data
 
-def test_config_html_binds_dial():
+
+def test_config_html_has_no_dial_binding():
     html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
-    assert 'config.performance_dial' in html
+    assert 'config.performance_dial' not in html
+    assert 'jev-dial' not in html
+
 
 def test_config_html_wraps_advanced_knobs():
     html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
     assert 'jev-advanced' in html, 'expert knobs must live in an advanced details block'
     # primary controls stay outside the advanced block
     adv_start = html.index('jev-advanced')
-    assert html.index('config.performance_dial') < adv_start
     assert html.index('config.jev_api_key') < adv_start
+    assert html.index('config.enabled') < adv_start
 
 def test_config_json_has_auto_exec_defaults():
     data = json.loads(_read(PLUGIN_ROOT / 'config.json'))
@@ -78,3 +82,17 @@ def test_config_html_binds_auto_exec():
     html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
     assert 'config.delegation_auto_execute' in html
     assert 'config.delegation_auto_execute_floor' in html
+
+
+def test_config_html_binds_observability_settings():
+    html = _read(PLUGIN_ROOT / 'webui' / 'config.html')
+    for key in ['obs_fallback_enabled', 'obs_session_enabled', 'obs_shadow_enabled']:
+        assert f'config.{key}' in html, key
+
+
+def test_config_json_has_observability_defaults():
+    data = json.loads(_read(PLUGIN_ROOT / 'config.json'))
+    for key in ['obs_fallback_enabled', 'obs_session_enabled', 'obs_shadow_enabled']:
+        assert key in data, key
+        assert isinstance(data.get(key), bool)
+        assert data.get(key) is True

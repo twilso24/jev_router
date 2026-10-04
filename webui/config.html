@@ -37,17 +37,6 @@
         <div class="field-control"><input id="jev-auto-exec-floor" type="number" min="0" max="1" step="0.05" x-model.number="config.delegation_auto_execute_floor" /></div>
       </div>
 
-      <div class="field">
-        <div class="field-label"><label class="field-title" for="jev-dial">Performance dial</label><div class="field-description">cost saver prefers fast cheap presets, balanced keeps the configured orders, max quality prefers the strongest presets. Pins in the panel always win.</div></div>
-        <div class="field-control">
-          <select id="jev-dial" x-model="config.performance_dial">
-            <option value="cost">cost saver</option>
-            <option value="balanced">balanced</option>
-            <option value="quality">max quality</option>
-          </select>
-        </div>
-      </div>
-
       <details class="jev-advanced">
         <summary>Advanced routing</summary>
       <div class="field">
@@ -124,6 +113,24 @@
         <div class="field-label"><label class="field-title" for="jev-breaker-cooldown">Breaker cooldown (hours)</label><div class="field-description">How long a tripped provider stays excluded before retry.</div></div>
         <div class="field-control"><input id="jev-breaker-cooldown" type="number" min="0.1" max="24" step="0.1" x-model.number="config.breaker_cooldown_hours" /></div>
       </div>
+      </details>
+
+      <details class="jev-advanced">
+        <summary>Observability</summary>
+        <div class="field">
+          <div class="field-label"><label class="field-title" for="jev-obs-fallback">Fallback chain tracking</label><div class="field-description">Record which preset was meant to serve a failed call (adds fallback_from_preset to call telemetry).</div></div>
+          <div class="field-control"><input id="jev-obs-fallback" type="checkbox" x-model="config.obs_fallback_enabled" /></div>
+        </div>
+
+        <div class="field">
+          <div class="field-label"><label class="field-title" for="jev-obs-session">Session aggregates</label><div class="field-description">Collect per-session decision counts, model switches, fallback rates, and band distributions.</div></div>
+          <div class="field-control"><input id="jev-obs-session" type="checkbox" x-model="config.obs_session_enabled" /></div>
+        </div>
+
+        <div class="field">
+          <div class="field-label"><label class="field-title" for="jev-obs-shadow">Shadow mode</label><div class="field-description">Log predicted vs actual preset decisions for routing accuracy analysis.</div></div>
+          <div class="field-control"><input id="jev-obs-shadow" type="checkbox" x-model="config.obs_shadow_enabled" /></div>
+        </div>
       </details>
 
       <div class="section-description">Advanced policy (provider include/exclude, schedules, band tuning) lives in the Jev Router panel and <code>routing-policy.yaml</code>.</div>

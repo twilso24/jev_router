@@ -382,3 +382,62 @@ def test_tuning_report_failing_flag_reflects_last_outcome(tmp_path):
     assert states['down']['failing'] is True
     assert states['down']['last_ok'] is False
     assert states['idle']['failing'] is False
+
+
+def _write_policy(td, orders, pins=None, auto_tune=True):
+    p = Path(td) / 'policy.yaml'
+    data = {'band_orders': orders, 'auto_tune': auto_tune}
+    if pins:
+        data['pinned_bands'] = pins
+    p.write_text(yaml.safe_dump(data))
+    return p
+
+
+def test_tuning_report_band_mode_when_no_banded_rows(tmp_path):
+    """With zero banded rows, tuning_report must still run in band mode:
+    suggested == file order verbatim. It must NOT pass None (global mode)
+    just because band_stats is an empty dict - that was the
+    Default-promoted-to-every-band polling bug."""
+    orders = {'light': ['Efficient', 'Default', 'High Power'],
+              'medium': ['Default', 'Efficient', 'High Power'],
+              'heavy': ['High Power', 'Efficient', 'Default']}
+    policy = _write_policy(tmp_path, orders)
+    db = Path(tmp_path) / 't.db'
+    conn = tel_mod.init_db(db)
+    # global evidence heavily favors Default; rows are band-less (legacy)
+    for _ in range(30):
+        tel_mod.record_call(conn, 'prov', 'Default', True, 0.5, None)
+        tel_mod.record_call(conn, 'prov', 'Efficient', True, 0.5, None)
+    conn.close()
+    rep = webui_data.tuning_report(
+        db, policy, ['Efficient', 'Default', 'High Power'])
+    assert rep['suggested'] == orders, (
+        'empty band_stats must not fall back to global ranking: '
+        f"got {rep['suggested']}")
+
+
+def test_tuning_report_applies_pins_to_suggested(tmp_path):
+    """A pinned band's suggested order must be the file order verbatim -
+    exactly what effective_band_orders does for the router. The panel
+    displays and Applies `suggested`, so unpinned suggestions overwrite
+    pinned content in the file."""
+    orders = {'light': ['Efficient', 'Default', 'High Power'],
+              'medium': ['Default', 'Efficient', 'High Power'],
+              'heavy': ['High Power', 'Efficient', 'Default']}
+    pins = {'light': True, 'medium': False, 'heavy': False}
+    policy = _write_policy(tmp_path, orders, pins=pins)
+    db = Path(tmp_path) / 't.db'
+    conn = tel_mod.init_db(db)
+    # banded evidence that would flip light if pins were ignored
+    for _ in range(15):
+        tel_mod.record_call(
+            conn, 'prov', 'Default', True, 0.5, None, band='light')
+        tel_mod.record_call(
+            conn, 'prov', 'Efficient', False, 0.5, 'boom', band='light')
+    conn.close()
+    rep = webui_data.tuning_report(
+        db, policy, ['Efficient', 'Default', 'High Power'])
+    assert rep['suggested']['light'] == orders['light'], (
+        'pinned band must keep file order in suggested: '
+        f"got {rep['suggested']['light']}")
+    assert rep['pinned_bands']['light'] is True

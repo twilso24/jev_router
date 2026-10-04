@@ -103,26 +103,27 @@ def _run(ext):
     return call_data
 
 
-def test_sync_runs_once_per_fingerprint_change():
+def test_sync_runs_on_every_call():
+    # no fingerprint guard: hand-edited band orders must heal on the next
+    # chat-model call even when the pool itself is unchanged
     sync_calls = []
     ext_mod = _load_ext('fp1', sync_calls)
     ext = _make_ext(ext_mod, {'enabled': True, 'jev_api_key': 'k'})
-    _run(ext)  # first call: fp1 -> sync (new fingerprint)
-    _run(ext)  # same fingerprint -> no re-sync
-    assert len(sync_calls) == 1, 'sync must run exactly once per fingerprint'
+    _run(ext)
+    _run(ext)  # same fingerprint -> sync still attempted every call
+    assert len(sync_calls) == 2, 'sync must run on every routed call'
     assert sync_calls[0][1] == ['P'], 'sync receives chat preset names'
 
 
-def test_fingerprint_change_triggers_new_sync():
+def test_fingerprint_change_still_syncs_cleanly():
     sync_calls = []
     ext_mod = _load_ext('fp1', sync_calls)
     ext = _make_ext(ext_mod, {'enabled': True, 'jev_api_key': 'k'})
     _run(ext)
-    # pool changed: same module, new fingerprint via stubbed pool module
     fp_mod = sys.modules['usr.plugins.jev_router.helpers.pool']
     fp_mod.pool_fingerprint = lambda entries: 'fp2'
     _run(ext)
-    assert len(sync_calls) == 2, 'changed fingerprint must re-run sync'
+    assert len(sync_calls) == 2, 'pool change path still synrollcs'
 
 
 def test_sync_failure_never_breaks_routing():

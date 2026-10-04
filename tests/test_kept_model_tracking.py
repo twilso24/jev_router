@@ -55,12 +55,12 @@ def _load_ext(track):
 
     fake_tracker = types.ModuleType('usr.plugins.jev_router.helpers.call_tracker')
 
-    def instrument(model, provider, preset, on_outcome):
+    def instrument(model, provider, preset, on_outcome, fallback_from_preset=None):
         if getattr(model, '_fake_wrapped', False):
             return False
         model._fake_wrapped = True
         model._fake_on = on_outcome
-        track['instrumented'].append((model, provider, preset))
+        track['instrumented'].append((model, provider, preset, fallback_from_preset))
         return True
 
     fake_tracker.instrument = instrument
@@ -71,8 +71,12 @@ def _load_ext(track):
     def init_db(_path):
         return _FakeConn(track)
 
-    def record_call(conn, provider, preset, ok, duration, error):
+    def record_call(conn, provider, preset, ok, duration, error,
+                    fallback_from_preset=None, band=None):
+        # band: kept-model outcomes are band-less by design (None)
         track['calls'].append((provider, preset, bool(ok), error))
+        # track band separately for band-awareness tests
+        track.setdefault('bands', []).append(band)
 
     fake_tel.init_db = init_db
     fake_tel.record_call = record_call

@@ -1,0 +1,62 @@
+<script type="module">
+  import { store } from "/plugins/jev_router/webui/jev-kill-switch-store.js";
+</script>
+
+<div x-data>
+<template x-if="$store.jevKillSwitch">
+  <div class="jev-kill-switch-control" data-endpoint="plugins/jev_router/routing_kill"
+       x-effect="
+         $store.chats.selectedContext?.agent_profile;
+         $nextTick(() => document.querySelector('.agent-profile-anchor')?.before($el));
+       "
+       x-create="$store.jevKillSwitch.onMount()"
+       x-destroy="$store.jevKillSwitch.cleanup()"
+       x-init="
+         $watch('$store.chats.selected', value => $store.jevKillSwitch.refresh(value || ''));
+         $watch('$store.chats.selectedContext?.agent_profile', () => $store.jevKillSwitch.refresh($store.chats?.selected || ''));
+       ">
+    <template x-if="$store.chats?.selectedContext">
+      <button type="button"
+              class="jev-kill-chip"
+              :class="{ 'route-off': !$store.jevKillSwitch.effective }"
+              :disabled="$store.jevKillSwitch.loading || $store.jevKillSwitch.saving || !$store.jevKillSwitch.globalEnabled || $store.chats.selectedContext.running"
+              :title="$store.jevKillSwitch.title()"
+              @click="$store.jevKillSwitch.toggle($store.chats.selected || '')">
+        <span class="material-symbols-outlined" style="font-size: 16px;">alt_route</span>
+        <span class="jev-kill-label" x-text="$store.jevKillSwitch.label()"></span>
+      </button>
+    </template>
+  </div>
+</template>
+</div>
+
+<style>
+  .jev-kill-switch-control {
+    display: contents;
+  }
+  .jev-kill-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-panel);
+    color: var(--color-text);
+    font-size: 0.72rem;
+    line-height: 1.3;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .jev-kill-chip:hover:not(:disabled) {
+    border-color: var(--color-primary);
+  }
+  .jev-kill-chip:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .jev-kill-chip.route-off .jev-kill-label {
+    color: var(--color-text-secondary);
+    text-decoration: line-through;
+  }
+</style>

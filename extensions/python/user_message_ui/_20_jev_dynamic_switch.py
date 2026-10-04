@@ -134,6 +134,10 @@ class JevDynamicSwitch(Extension):
                 cfg = {}
 
             from usr.plugins.jev_router.helpers import dynamic_switch as ds
+            from usr.plugins.jev_router.helpers.gate import routing_allowed_agent
+            if not routing_allowed_agent(agent, cfg):
+                _dbg('skip: routing disabled (global or per-chat)')
+                return
             if not ds.should_dynamic_switch(cfg):
                 return
 
