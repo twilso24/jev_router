@@ -119,7 +119,6 @@ def _fake_response():
 
 
 def test_query_success():
-    import msgspec
     import unittest.mock
     client = MagicMock()
     client.system_one = AsyncMock(return_value=_fake_response())
@@ -132,8 +131,10 @@ def test_query_success():
         'model': 'jev-latest',
         'usage': {'input_tokens': 10, 'output_tokens': 5},
     }
-    with unittest.mock.patch.object(msgspec, 'to_builtins', return_value=fake_builtins):
-        result = asyncio.run(jev.query(client, 'hello', _valid_questions(), 'jev-latest'))
+    resp = _fake_response()
+    resp.model_dump = MagicMock(return_value=fake_builtins)
+    client.system_one = AsyncMock(return_value=resp)
+    result = asyncio.run(jev.query(client, 'hello', _valid_questions(), 'jev-latest'))
     assert 'answers' in result
     assert 'elapsed_ms' in result
     assert result['model'] == 'jev-latest'

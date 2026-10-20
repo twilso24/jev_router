@@ -1,10 +1,11 @@
+import os
 import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 
-DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
+DEBUG_LOG = Path(os.environ.get('JEV_ROUTER_DEBUG_LOG') or '/a0/tmp/jev_router_debug.log')
 
 
 def _dbg(msg: str) -> None:

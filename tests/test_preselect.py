@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helpers import preselect
 
 CFG_AUTO = {'enabled': True, 'chat_preselect': True, 'delegation_mode': 'auto'}
+CFG_ADVISE = {'enabled': True, 'chat_preselect': True, 'delegation_mode': 'advise'}
 PROFILES = ['default', 'developer', 'researcher', 'hacker', 'agent0']
 
 
@@ -21,8 +22,12 @@ def test_gate_off_when_disabled():
 def test_gate_off_when_preselect_disabled():
     assert not preselect.should_preselect({'enabled': True, 'chat_preselect': False, 'delegation_mode': 'auto'})
 
-def test_gate_off_in_advise_mode():
-    assert not preselect.should_preselect({'enabled': True, 'chat_preselect': True, 'delegation_mode': 'advise'})
+def test_gate_on_in_advise_mode():
+    # chat_preselect owns profile selection; it must not depend on delegation_mode.
+    assert preselect.should_preselect(CFG_ADVISE)
+
+def test_gate_on_without_delegation_mode():
+    assert preselect.should_preselect({'enabled': True, 'chat_preselect': True})
 
 def test_gate_on_when_all_set():
     assert preselect.should_preselect(CFG_AUTO)
@@ -62,14 +67,19 @@ def test_profile_for_empty_available():
     assert preselect.profile_for('coding', []) is None
 
 
-def test_decide_skips_chat_class():
+def test_decide_chat_class_falls_back_to_agent0():
     profile, reason = preselect.decide('chat', 0.99, PROFILES, CFG_AUTO)
-    assert profile is None
+    assert profile == 'agent0'
     assert 'chat' in reason
+
+def test_decide_low_confidence_falls_back_to_agent0():
+    profile, reason = preselect.decide('coding', 0.3, PROFILES, CFG_AUTO)
+    assert profile == 'agent0'
+    assert 'confidence' in reason
 
 def test_decide_low_confidence_skips():
     profile, reason = preselect.decide('coding', 0.3, PROFILES, CFG_AUTO)
-    assert profile is None
+    assert profile == 'agent0'
     assert 'confidence' in reason
 
 def test_decide_good_confidence_selects():
@@ -93,20 +103,20 @@ def test_run_success_returns_profile():
         'refactor this module', CFG_AUTO, _fake_query(), object(), 'jev-latest', PROFILES, 2.0))
     assert profile == 'developer'
 
-def test_run_query_failure_keeps_default():
+def test_run_query_failure_falls_back_to_agent0():
     async def boom(client, state, questions, model):
         raise RuntimeError('jev down')
     profile, reason = asyncio.run(preselect.run(
         'x', CFG_AUTO, boom, object(), 'jev-latest', PROFILES, 2.0))
-    assert profile is None
+    assert profile == 'agent0'
     assert 'jev query failed' in reason
 
-def test_run_timeout_keeps_default():
+def test_run_timeout_falls_back_to_agent0():
     async def slow(client, state, questions, model):
         await asyncio.sleep(5)
     profile, reason = asyncio.run(preselect.run(
         'x', CFG_AUTO, slow, object(), 'jev-latest', PROFILES, 0.1))
-    assert profile is None
+    assert profile == 'agent0'
     assert 'jev query failed' in reason
 
 def test_run_bad_answer_keeps_default():
@@ -114,7 +124,7 @@ def test_run_bad_answer_keeps_default():
         return {'answers': {'task_class': {'choice': None}}}
     profile, reason = asyncio.run(preselect.run(
         'x', CFG_AUTO, weird, object(), 'jev-latest', PROFILES, 2.0))
-    assert profile is None
+    assert profile == 'agent0'
 
 
 if __name__ == '__main__':

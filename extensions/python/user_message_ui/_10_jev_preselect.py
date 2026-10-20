@@ -18,6 +18,9 @@ import traceback
 from helpers.extension import Extension
 
 
+_PRESELECT_MARK_KEY = 'jev_preselect_ui_decision'
+
+
 def _dbg(msg: str) -> None:
     try:
         from usr.plugins.jev_router.helpers.preselect import _dbg as _pdbg
@@ -36,6 +39,12 @@ class JevPreselectUi(Extension):
             context = getattr(agent, "context", None)
             if context is None:
                 return
+            # One judgment per chat: a previous hook call already decided.
+            try:
+                if context.get_data(_PRESELECT_MARK_KEY):
+                    return
+            except Exception:
+                pass
             if not isinstance(data, dict):
                 return
             message = str(data.get("message") or "").strip()
@@ -50,7 +59,10 @@ class JevPreselectUi(Extension):
             except Exception:
                 return
             log = getattr(context, "log", None)
-            if log is not None and getattr(log, "logs", None):
+            if log is not None and any(
+                getattr(entry, "type", "") != "response"
+                for entry in (getattr(log, "logs", None) or [])
+            ):
                 return
 
             # Explicit profile (or already pre-selected via API path) wins.
@@ -113,6 +125,10 @@ class JevPreselectUi(Extension):
                 message, cfg, _query_fn, client, model, profiles,
                 float(cfg.get("jev_timeout_s") or 2.0))
             _dbg("ui decision: " + reason)
+            try:
+                context.set_data(_PRESELECT_MARK_KEY, True)
+            except Exception:
+                pass
             if not profile or profile == current_profile:
                 return
 
@@ -133,6 +149,6 @@ class JevPreselectUi(Extension):
             except Exception:
                 pass
             _dbg("ui pre-selected agent_profile=" + profile)
-        except Exception:
-            _dbg("ui ERROR " + traceback.format_exc()[:300])
+        except Exception as exc:
+            _dbg("ui ERROR " + "".join(traceback.format_exception_only(type(exc), exc)).strip())
             return

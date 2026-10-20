@@ -22,7 +22,7 @@ from helpers.extension import Extension
 _STATE_KEY = 'jev_dynamic_switch_state'
 _FIRED = {}  # per-context digest cache
 _FIRED_MAX = 512
-DEBUG_LOG = '/a0/tmp/jev_router_debug.log'
+DEBUG_LOG = os.environ.get('JEV_ROUTER_DEBUG_LOG') or '/a0/tmp/jev_router_debug.log'
 
 
 def _dbg(msg: str) -> None:

@@ -32,9 +32,16 @@ class _FakeContext:
         self.agent0 = agent
         self._task = None
         self.saved = 0
+        self.data = {}
 
     def is_running(self):
         return False
+
+    def get_data(self, key, recursive=True):
+        return self.data.get(key)
+
+    def set_data(self, key, value, recursive=True):
+        self.data[key] = value
 
 
 class _FakeAgent:
@@ -148,7 +155,7 @@ def test_chat_with_history_skipped():
     calls = _install_stubs()
     mod = _load()
     agent, ctx = _make(mod)
-    ctx.log.logs = [object()]
+    ctx.log.logs = [SimpleNamespace(type='user')]
     ext = mod.JevPreselectUi.__new__(mod.JevPreselectUi)
     ext.agent = agent
     _run(ext)
@@ -165,7 +172,8 @@ def test_explicit_profile_wins():
     assert calls['query'] == 0 and not calls['initialize']
 
 
-def test_advise_mode_skipped():
+def test_advise_mode_still_preselects():
+    # chat_preselect owns profile selection; delegation_mode does not gate it.
     calls = _install_stubs()
     sys.modules['helpers.plugins'].get_plugin_config = (
         lambda name, agent=None, **kw: dict(CFG, delegation_mode='advise') if name == 'jev_router' else {})
@@ -174,7 +182,7 @@ def test_advise_mode_skipped():
     ext = mod.JevPreselectUi.__new__(mod.JevPreselectUi)
     ext.agent = agent
     _run(ext)
-    assert calls['query'] == 0
+    assert calls['query'] == 1
 
 
 def test_no_key_skipped():
@@ -210,6 +218,44 @@ def test_never_raises_on_init_failure():
     ext.agent = agent
     _run(ext)  # must not raise
     assert ctx.agent0.config.profile == 'agent0'
+
+
+def test_failed_swap_still_judges_once():
+    calls = _install_stubs()
+    sys.modules['initialize'].initialize_agent = (
+        lambda override_settings=None: (_ for _ in ()).throw(RuntimeError('boom')))
+    mod = _load()
+    agent, ctx = _make(mod)
+    ext = mod.JevPreselectUi.__new__(mod.JevPreselectUi)
+    ext.agent = agent
+    _run(ext)
+    _run(ext)  # second hook call on the same chat must not re-judge
+    assert calls['query'] == 1, calls
+
+
+def test_swap_error_log_keeps_exception_line():
+    _install_stubs()
+    sys.modules['initialize'].initialize_agent = (
+        lambda override_settings=None: (_ for _ in ()).throw(RuntimeError('boom')))
+    mod = _load()
+    msgs = []
+    mod._dbg = lambda msg: msgs.append(msg)
+    agent, ctx = _make(mod)
+    ext = mod.JevPreselectUi.__new__(mod.JevPreselectUi)
+    ext.agent = agent
+    _run(ext)
+    assert any('RuntimeError: boom' in m for m in msgs), msgs
+
+
+def test_greeting_only_chat_still_preselects():
+    calls = _install_stubs()
+    mod = _load()
+    agent, ctx = _make(mod)
+    ctx.log.logs = [SimpleNamespace(type='response')]  # framework greeting only
+    ext = mod.JevPreselectUi.__new__(mod.JevPreselectUi)
+    ext.agent = agent
+    _run(ext)
+    assert calls['query'] == 1, calls
 
 
 if __name__ == '__main__':

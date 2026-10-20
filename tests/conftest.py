@@ -20,8 +20,11 @@
 # test-fought namespaces (helpers*, usr*, plugins*, python*) are managed —
 # pytest/stdlib machinery is never evicted and fixtures like tmp_path keep
 # working.
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("JEV_ROUTER_DEBUG_LOG", "/tmp/jev_router_test_debug.log")
 
 import pytest
 import _pytest.python as _pp

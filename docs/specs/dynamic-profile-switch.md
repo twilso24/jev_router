@@ -94,7 +94,7 @@ async def run(message: str, cfg: dict, query_fn, client, model: str, profiles: l
 - Switching only affects the main agent profile (not `call_subordinate` delegation)
 - Profile changes are made while the chat is idle (before the next loop starts)
 - Jev judgment is bounded to ≤2 seconds
-- The plugin is enabled and configured with `delegation_mode=auto`
+- The plugin is enabled with `chat_preselect: true`; `delegation_mode` does not gate preselect (mid-chat switching still requires `dynamic_switch_enabled: true`)
 
 ## Implementation Order
 

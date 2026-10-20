@@ -5,12 +5,15 @@ extensions/python/_functions/initialize/initialize_agent/start/ calls into it.
 Spec decision #5B: pre-select the agent profile for NEW chats from a Jev
 task-class judgment; explicit user choice always wins; never raises.
 """
+import os
 import asyncio
 from pathlib import Path
 
-DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
+DEBUG_LOG = Path(os.environ.get('JEV_ROUTER_DEBUG_LOG') or '/a0/tmp/jev_router_debug.log')
 
 CONFIDENCE_THRESHOLD = 0.5
+# Default profile for chats with no task-class match, so every chat gets one.
+DEFAULT_PROFILE = 'agent0'
 # Only classes that have a real subordinate profile.
 TASK_TO_PROFILE = {
     'coding': 'developer',
@@ -34,9 +37,7 @@ def _dbg(msg: str) -> None:
 def should_preselect(cfg: dict) -> bool:
     """True when auto pre-selection is enabled for new chats."""
     try:
-        return (bool(cfg.get('enabled'))
-                and bool(cfg.get('chat_preselect'))
-                and str(cfg.get('delegation_mode') or '').lower() == 'auto')
+        return bool(cfg.get('enabled')) and bool(cfg.get('chat_preselect'))
     except Exception:
         return False
 
@@ -64,14 +65,21 @@ def profile_for(task_class: str, profiles: list) -> str | None:
     return None
 
 
+def _fallback(profiles: list, cause: str) -> tuple[str | None, str]:
+    """Default profile when no task-class match, if it is available."""
+    if DEFAULT_PROFILE in (profiles or []):
+        return DEFAULT_PROFILE, f'{cause}; fallback profile={DEFAULT_PROFILE}'
+    return None, f'{cause}; default profile {DEFAULT_PROFILE} unavailable'
+
+
 def decide(task_class: str, confidence: float, profiles: list,
            cfg: dict) -> tuple[str | None, str]:
     """Decide a profile from task class + confidence. Returns (profile, reason)."""
     if task_class in ('chat', 'other'):
-        return None, 'task_class=chat/other; no profile pre-selection'
+        return _fallback(profiles, 'task_class=chat/other')
     if confidence < CONFIDENCE_THRESHOLD:
-        return None, (f'confidence={confidence:.2f} below threshold '
-                      f'{CONFIDENCE_THRESHOLD:.2f}')
+        return _fallback(profiles, (f'confidence={confidence:.2f} below threshold '
+                                    f'{CONFIDENCE_THRESHOLD:.2f}'))
     profile = profile_for(task_class, profiles)
     if profile:
         return profile, (f'task_class={task_class} '
@@ -104,11 +112,11 @@ async def run(message: str, cfg: dict, query_fn, client, model: str,
             query_fn(client, {'message': message}, _questions(), model),
             timeout=max(float(budget or 0), 0.1))
     except Exception as exc:
-        return None, f'jev query failed ({type(exc).__name__}: {str(exc)[:120]}); keeping default profile'
+        return _fallback(profiles, f'jev query failed ({type(exc).__name__}: {str(exc)[:120]})')
     answers = (result or {}).get('answers') or {}
     tc = answers.get('task_class')
     if not isinstance(tc, dict):
-        return None, 'jev returned malformed task_class; keeping default profile'
+        return _fallback(profiles, 'jev returned malformed task_class')
     choice = tc.get('choice')
     try:
         conf = float(tc.get('confidence') or 0.0)

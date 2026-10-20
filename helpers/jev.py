@@ -2,13 +2,14 @@
 
 Replaces the typesafe_ai dependency. Uses the typesafe_sdk package directly.
 """
+import os
 import json
 import math
 import time
 
 from pathlib import Path
 
-DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
+DEBUG_LOG = Path(os.environ.get('JEV_ROUTER_DEBUG_LOG') or '/a0/tmp/jev_router_debug.log')
 
 
 def _dbg(msg: str) -> None:
@@ -115,11 +116,10 @@ async def query(client, state, questions, model, timeout_s=2.0, on_error=None):
     secrets). When on_error is provided it receives the same detail string.
     """
     try:
-        import msgspec
         validate_request(state, questions)
         start = time.monotonic()
         response = await client.system_one(state=state, questions=questions, model=model)
-        result = msgspec.to_builtins(response)
+        result = response.model_dump(mode='json')
         if set(result["answers"]) != set(questions):
             raise ValueError("TypeSafe returned an incomplete set of answers; do not act on this result.")
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)

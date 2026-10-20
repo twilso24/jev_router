@@ -34,7 +34,7 @@ No other plugins required: the plugin bundles its own Jev helper and installs th
 
 ### Dynamic Profile Switching (opt-in)
 - **Mid-chat switching**: from message 2, one Jev judgment per user message (while the chat is idle) checks the task class. A switch needs confidence >= `dynamic_switch_threshold`, `dynamic_switch_consecutive` matching judgments in a row, and the `dynamic_switch_cooldown_seconds` per-profile cooldown.
-- **Respects the user**: manual profile choices always win; only the main chat profile is switched; preselect owns message 1. Requires `delegation_mode: auto` and `chat_preselect: true`.
+- **Respects the user**: manual profile choices always win; only the main chat profile is switched; preselect owns message 1. New-chat preselect requires only `chat_preselect: true` (it no longer depends on `delegation_mode`). Every new chat gets a profile: coding, research, security, and testing map to their subordinate profiles; chat, low-confidence, query failures, timeouts, and malformed answers fall back to `agent0`. Mid-chat switching still requires `dynamic_switch_enabled: true`.
 - **Fail-safe**: any error keeps the current profile; decisions are logged under the `[dynamic-switch]` tag in the debug log.
 
 ### Fit-Aware Model Selection (P5)

@@ -87,6 +87,16 @@ def test_explicit_profile_never_overridden():
     assert 'agent_profile' not in data['kwargs']['override_settings']
 
 
+def test_empty_first_message_not_judged_by_start_hook():
+    # WebUI chat creation sends no first message; the UI hook owns message 1.
+    calls = _install_stubs({'message': ''})
+    mod = _load()
+    data = _data()
+    mod.JevPreselectProfile.__new__(mod.JevPreselectProfile).execute(data=data)
+    assert calls['query_calls'] == 0
+    assert 'agent_profile' not in data['kwargs']['override_settings']
+
+
 def test_existing_context_skipped():
     _install_stubs({'message': 'fix bug', 'context_id': 'abc'})
     mod = _load()
@@ -95,13 +105,14 @@ def test_existing_context_skipped():
     assert 'agent_profile' not in data['kwargs']['override_settings']
 
 
-def test_advise_mode_skipped_without_query():
+def test_advise_mode_still_preselects():
+    # chat_preselect owns profile selection; delegation_mode does not gate it.
     _install_stubs({'message': 'fix bug'})
     sys.modules['helpers.plugins'].get_plugin_config = lambda name, agent=None, **kw: dict(CFG, delegation_mode='advise')
     mod = _load()
     data = _data()
     mod.JevPreselectProfile.__new__(mod.JevPreselectProfile).execute(data=data)
-    assert 'agent_profile' not in data['kwargs']['override_settings']
+    assert data['kwargs']['override_settings'].get('agent_profile') == 'developer', data
 
 
 def test_no_api_key_skips_without_query():

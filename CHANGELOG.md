@@ -2,6 +2,15 @@
 
 All notable changes to the Jev Router plugin.
 
+## [Unreleased]
+
+### Fixed
+- **New-chat profile preselect no longer requires `delegation_mode: auto`**: the gate now depends only on `enabled` and `chat_preselect`, so every new chat gets a profile judgment regardless of delegation advice mode.
+- **Every chat gets a profile**: `chat`, `other`, low-confidence judgments, Jev query failures, timeouts, and malformed answers all fall back to `agent0` when that profile is available, instead of keeping no pre-selection.
+
+### Docs
+- README and `docs/specs/dynamic-profile-switch.md` updated to match the decoupled gate.
+
 ## [0.7.13] - 2026-10-04
 
 ### Added

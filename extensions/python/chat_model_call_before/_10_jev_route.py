@@ -7,6 +7,8 @@ avoids re-running Jev for repeated loop iterations of one user message.
 """
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 from typing import Any, Dict
 
@@ -16,7 +18,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 DECISION_CACHE: Dict[str, tuple] = {}
 DECISION_CACHE_MAX = 32
 _LAST_WIRE_FP = None  # last pool fingerprint auto-wire synced against
-DEBUG_LOG = Path('/a0/tmp/jev_router_debug.log')
+DEBUG_LOG = Path(os.environ.get('JEV_ROUTER_DEBUG_LOG') or '/a0/tmp/jev_router_debug.log')
 
 
 def _dbg(msg: str) -> None:
