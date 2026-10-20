@@ -2,7 +2,7 @@
 
 All notable changes to the Jev Router plugin.
 
-## [Unreleased]
+## [0.7.14] - 2026-10-20
 
 ### Fixed
 - **New-chat profile preselect no longer requires `delegation_mode: auto`**: the gate now depends only on `enabled` and `chat_preselect`, so every new chat gets a profile judgment regardless of delegation advice mode.
