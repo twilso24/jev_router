@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_PANEL = ROOT / 'webui' / 'jev-router-panel.html'
 CANONICAL_CONFIG = ROOT / 'webui' / 'config.html'
+CANVAS_PANEL = ROOT / 'extensions' / 'webui' / 'right-canvas-panels' / 'jev-router-panel.html'
 # The nested plugin/ tree is a legacy one-time sync snapshot, not canonical;
 # only copies under the real webui/ render source are asserted identical.
 
@@ -21,12 +22,10 @@ def test_canonical_panel_and_config_exist_and_nonempty():
     assert CANONICAL_CONFIG.exists() and CANONICAL_CONFIG.stat().st_size > 100
 
 
-def test_no_duplicate_panel_bodies_outside_plugin_snapshot():
-    "Every jev-router-panel.html outside the plugin/ snapshot must be byte-identical."
-    copies = [p for p in ROOT.glob('**/jev-router-panel.html')
-              if 'plugin' not in p.relative_to(ROOT).parts
-              and 'node_modules' not in p.parts]
-    assert copies, 'no canonical panel copy found'
+def test_canonical_panel_copies_are_byte_identical():
+    "The canonical inner panel and its plugin snapshot must remain identical."
+    copies = [CANONICAL_PANEL, ROOT / 'plugin' / 'webui' / 'jev-router-panel.html']
+    assert all(p.exists() for p in copies), 'canonical panel copy missing'
     assert {_sha(p) for p in copies} == {_sha(CANONICAL_PANEL)}
 
 
@@ -103,3 +102,24 @@ def test_collapse_does_not_remove_preset_content():
     assert 'jev-preset-desc-input' in html, 'description input missing'
     assert "action: 'describe'" in html or "action: \"describe\"" in html, 'describe action missing'
     assert 'jev-preset-save' in html, 'save button missing'
+
+
+# --- Right-canvas surface isolation contract -----------------------------
+
+
+def test_canvas_panel_has_surface_wrapper():
+    html = CANVAS_PANEL.read_text()
+    assert 'right-canvas-surface-panel' in html
+    assert 'data-surface-id="jev_router"' in html
+    assert "is-active': $store.rightCanvas?.isSurfaceVisible('jev_router')" in html
+    assert "is-mounted': $store.rightCanvas?.isSurfaceRendered('jev_router')" in html
+    assert ":aria-hidden=\"(!$store.rightCanvas?.isSurfaceVisible('jev_router')).toString()\"" in html
+    assert 'path="/plugins/jev_router/webui/jev-router-panel.html"' in html
+    assert 'mode="canvas"' in html
+
+
+def test_canvas_panel_is_thin_wrapper():
+    html = CANVAS_PANEL.read_text()
+    assert '.jev-header' not in html
+    assert 'callJsonApi' not in html
+    assert '<script type="module">' not in html
